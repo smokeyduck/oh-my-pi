@@ -141,6 +141,7 @@ import { MAX_RPC_FRAME_BYTES, MAX_RPC_REASSEMBLED_BYTES, RpcFrameEncoder } from 
 import { getRpcGitChanges, getRpcGitDiff } from "./rpc-git-diff";
 import { RpcGoalController } from "./rpc-goal";
 import { claimRpcInput, readRpcInputFrames } from "./rpc-input";
+import { DEFAULT_MODEL_PICKER_LIMIT, RpcModelPicker } from "./rpc-model-picker";
 import { RpcDictationBridge, type RpcDictationControllerFactory } from "./rpc-dictation";
 import { RpcLiveBridge, type RpcLiveSessionFactory } from "./rpc-live";
 import { RpcTerminalHost, resolveTerminalShell } from "./rpc-terminal";
@@ -741,6 +742,7 @@ function isDetachedSerialCommand(command: RpcCommand): boolean {
  * behind a keystroke. `live_start`, `live_connect` and `dictation_start` respond only once
  * connected or recording, so they are backgrounded and their stop commands can cancel them.
  * `handoff` leaves the queue free for steering and `abort` while its compaction is preparing.
+ * `resume` and `abort_and_deliver_queue` wait behind earlier user input, so they run in the background like `prompt`.
  * Response correlation is preserved via each command's `id`; ordering across
  * concurrent commands is not guaranteed and clients MUST match on `id`.
  *
@@ -773,6 +775,8 @@ export function dispatchRpcInputFrame(parsed: unknown, deps: RpcInputFrameDeps):
 		BACKGROUND_COMMANDS.has(command.type) ||
 		command.type === "prompt" ||
 		command.type === "steer" ||
+		command.type === "resume" ||
+		command.type === "abort_and_deliver_queue" ||
 		command.type === "dictation_start" ||
 		command.type === "follow_up" ||
 		command.type === "steer_subagent" ||
@@ -800,6 +804,8 @@ const USER_INPUT_TYPES: Record<string, true> = {
 	steer: true,
 	follow_up: true,
 	abort_and_prompt: true,
+	abort_and_deliver_queue: true,
+	resume: true,
 };
 
 const SESSION_CHANGE_TYPES: Record<string, true> = {
@@ -1958,6 +1964,7 @@ export interface RpcModeOptions {
  * Listens for JSON commands on stdin, outputs events and responses on stdout.
  */
 export async function runRpcMode(session: AgentSession, options: RpcModeOptions = {}): Promise<never> {
+	const modelPicker = new RpcModelPicker(session);
 	const {
 		setToolUIContext,
 		headless = false,
@@ -2947,6 +2954,32 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 				return fitAbortAndRestoreQueueResponse(id, restored, frameEncoder.maxIntactFrameBytes);
 			}
 
+			case "abort_and_deliver_queue": {
+				// The TUI's empty Enter. Ordered behind earlier input, so a message sent just
+				// before is queued by the time this runs and is the one the continuation takes.
+				const aborted = await inputGate.enqueue(async () => {
+					if (!inputGate.isCurrent(command) || !session.isStreaming || !session.hasInterruptibleInput) {
+						return false;
+					}
+					await session.abort({ reason: USER_INTERRUPT_LABEL, deliverQueuedMessages: true });
+					return true;
+				});
+				return success(id, "abort_and_deliver_queue", { aborted });
+			}
+
+			case "resume": {
+				// The TUI's `.`/`c`, ordered behind earlier input like abort_and_deliver_queue.
+				// Answer once the continuation is under way; a failure after that is a late error.
+				await inputGate.enqueue(async () => {
+					if (!inputGate.isCurrent(command) || shutdownState.requested) return;
+					const admitted = Promise.withResolvers<void>();
+					const resuming = session.resume({ onAdmitted: admitted.resolve });
+					await Promise.race([resuming, admitted.promise]);
+					resuming.catch(onPromptError(id, "resume"));
+				});
+				return success(id, "resume");
+			}
+
 			case "abort_and_prompt": {
 				loopModeController.pause();
 				if (collabController.sendAbort()) {
@@ -3143,6 +3176,8 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 					thinkingLevel: session.thinkingLevel,
 					thinkingConfigured: session.configuredThinkingLevel(),
 					availableThinkingLevels: [...session.getAvailableThinkingLevels()],
+					configuredThinkingLevel: session.configuredThinkingLevel(),
+					thinkingLevels: session.getAvailableEffortSelectors(),
 					isStreaming: session.isStreaming,
 					isCompacting: session.isCompacting,
 					isBackgroundCompacting: session.isBackgroundCompacting,
@@ -3639,7 +3674,8 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 				if (!model) {
 					return error(id, "set_model", `Model not found: ${command.provider}/${command.modelId}`);
 				}
-				await session.setModel(model);
+				await session.setModel(model, command.role);
+				if (command.thinkingLevel !== undefined) session.setThinkingLevel(command.thinkingLevel);
 				return success(id, "set_model", model);
 			}
 
@@ -3690,6 +3726,15 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 						...reportedModelLimits(model),
 					})),
 				});
+			}
+
+			case "get_model_picker": {
+				const limit = command.limit ?? DEFAULT_MODEL_PICKER_LIMIT;
+				if (!Number.isInteger(limit) || limit < 1) {
+					return error(id, "get_model_picker", "`limit` must be a positive integer.");
+				}
+				await session.modelRegistry.awaitBackgroundRefresh();
+				return success(id, "get_model_picker", modelPicker.query(command.query ?? "", limit));
 			}
 
 			// =================================================================

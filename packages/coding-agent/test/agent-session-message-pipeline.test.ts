@@ -1775,9 +1775,9 @@ describe("AgentSession message pipeline", () => {
 			true,
 		],
 		[
-			"Gemini CLI",
+			"Antigravity",
 			buildModel({
-				...getBundledModel("google-gemini-cli", "gemini-2.5-pro"),
+				...getBundledModel("google-antigravity", "gemini-2.5-pro"),
 				thinking: { mode: "budget", efforts: [Effort.Medium] },
 			}),
 			false,
@@ -3123,7 +3123,7 @@ describe("AgentSession message pipeline", () => {
 				"compaction.enabled": false,
 				"bash.autoBackground.enabled": false,
 				"bashInterceptor.enabled": false,
-				"tools.xdev": false,
+				"tools.commands": false,
 			}),
 			model,
 			disableExtensionDiscovery: true,
@@ -3257,7 +3257,7 @@ describe("AgentSession message pipeline", () => {
 				"compaction.enabled": false,
 				"bash.autoBackground.enabled": false,
 				"bashInterceptor.enabled": false,
-				"tools.xdev": false,
+				"tools.commands": false,
 			}),
 			model,
 			disableExtensionDiscovery: true,
@@ -3369,7 +3369,7 @@ describe("AgentSession message pipeline", () => {
 			modelRegistry,
 			settings: Settings.isolated({
 				"compaction.enabled": false,
-				"tools.xdev": false,
+				"tools.commands": false,
 				"web_search.enabled": true,
 			}),
 			model,

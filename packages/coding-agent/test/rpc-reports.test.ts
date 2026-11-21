@@ -86,7 +86,7 @@ describe("buildRpcActiveTools", () => {
 				},
 			},
 			hasBuiltInTool: (name: string) => name === "read",
-			getXdevToolEntries: () => [{ name: "mcp__db_query", summary: "DB device" }],
+			getToolCommandEntries: () => [{ name: "mcp__db_query", summary: "DB device" }],
 		} as unknown as AgentSession;
 
 		const { tools } = buildRpcActiveTools(session);
@@ -95,7 +95,7 @@ describe("buildRpcActiveTools", () => {
 			{ name: "read", description: "Read files", source: "builtin" },
 			{ name: "mcp__docs_search", description: "Search docs", source: "mcp" },
 			{ name: "my_custom", description: "Custom tool", source: "extension" },
-			// xd:// mounts follow the active set, same source classification.
+			// mounted tool commands follow the active set, same source classification.
 			{ name: "mcp__db_query", description: "DB device", source: "mcp" },
 		]);
 	});

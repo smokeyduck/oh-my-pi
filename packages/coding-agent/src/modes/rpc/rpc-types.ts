@@ -68,6 +68,7 @@ import type { CacheWarmingMode } from "../../session/cache-warmer";
 import type { FileEntry, SessionEntry, SessionTreeNode } from "../../session/session-entries";
 import type { UsageLimitState } from "../../session/usage-limit";
 import type { AvailableSlashCommandSource } from "../../slash-commands/available-commands";
+import type { RpcModelPickerResult } from "./rpc-model-picker";
 import type { SubagentEventPayload, SubagentLifecyclePayload, SubagentProgressPayload } from "../../task";
 import type { DebugParams } from "../../tools/debug";
 import type { RpcBrowserHostInfo } from "./rpc-browser-host";
@@ -113,6 +114,8 @@ export type RpcCommand =
 			images?: ImageContent[];
 	  }
 	| { id?: string; type: "abort_and_restore_queue" }
+	| { id?: string; type: "abort_and_deliver_queue" }
+	| { id?: string; type: "resume" }
 	| { id?: string; type: "new_session"; parentSession?: string }
 	| { id?: string; type: "drop_session" }
 	| {
@@ -204,9 +207,17 @@ export type RpcCommand =
 	| { id?: string; type: "dictation_stop" }
 
 	// Model
-	| { id?: string; type: "set_model"; provider: string; modelId: string }
+	| {
+			id?: string;
+			type: "set_model";
+			provider: string;
+			modelId: string;
+			thinkingLevel?: ConfiguredThinkingLevel;
+			role?: string;
+	  }
 	| { id?: string; type: "cycle_model"; direction?: "forward" | "backward" }
 	| { id?: string; type: "get_available_models"; forceRefresh?: boolean }
+	| { id?: string; type: "get_model_picker"; query?: string; limit?: number }
 	| {
 			id?: string;
 			type: "discover_provider_models";
@@ -223,7 +234,7 @@ export type RpcCommand =
 	  }
 
 	// Thinking
-	| { id?: string; type: "set_thinking_level"; level: ThinkingLevel | "auto" }
+	| { id?: string; type: "set_thinking_level"; level: ConfiguredThinkingLevel }
 	| { id?: string; type: "cycle_thinking_level" }
 	| { id?: string; type: "get_available_thinking_levels" }
 
@@ -727,6 +738,10 @@ export interface RpcSessionState {
 	thinkingConfigured?: ConfiguredThinkingLevel;
 	/** Levels the active model actually supports (empty = model does not reason); pickers must not offer unsupported values. */
 	availableThinkingLevels?: ThinkingLevel[];
+	/** The user's thinking selector: `auto` while auto mode picks the effort (same value as `thinkingConfigured`). */
+	configuredThinkingLevel?: ConfiguredThinkingLevel;
+	/** Selectors the active model accepts: `off`, `auto`, then its efforts (same ladder as `availableThinkingLevels`). */
+	thinkingLevels?: ConfiguredThinkingLevel[];
 	isStreaming: boolean;
 	isCompacting: boolean;
 	/** Manual compaction that prepares without blocking the current turn. */
@@ -1466,7 +1481,7 @@ export interface RpcPlanApprovalResult {
 
 /**
  * Emitted when the agent submits a plan for approval (a `write` to
- * `xd://propose` while plan mode is active). The host answers with a
+ * a `propose` command while plan mode is active). The host answers with a
  * `plan_approval` command. `options` lists the approval choices; `"refine"`
  * is answered with `approved: false` plus `feedback`, not `option`.
  */
@@ -2288,7 +2303,7 @@ export interface RpcActiveTool {
 
 /**
  * Result of get_active_tools: active top-level tools (TUI /tools rows),
- * followed by xd:// mounted entries (the `~ xd://name` rows).
+ * followed by mounted tool commands (the `~ <name>` rows).
  */
 export interface RpcActiveToolsResult {
 	tools: RpcActiveTool[];
@@ -2415,6 +2430,8 @@ export type RpcResponse =
 			success: true;
 			data: RpcAbortAndRestoreQueueResult;
 	  }
+	| { id?: string; type: "response"; command: "abort_and_deliver_queue"; success: true; data: { aborted: boolean } }
+	| { id?: string; type: "response"; command: "resume"; success: true }
 	| {
 			id?: string;
 			type: "response";
@@ -2584,6 +2601,13 @@ export type RpcResponse =
 			command: "discover_provider_models";
 			success: true;
 			data: { models: RpcDiscoveredModel[] };
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_model_picker";
+			success: true;
+			data: RpcModelPickerResult;
 	  }
 
 	// Thinking

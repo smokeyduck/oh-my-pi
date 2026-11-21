@@ -151,9 +151,9 @@ export class TerminalTool implements AgentTool<typeof terminalSchema, TerminalTo
 			case "stop":
 				return "write";
 			case "open":
-				return params.host ? this.#bashDecision(`ssh ${params.host}`) : { tier: "exec", policyKey: "bash" };
+				return params.host ? this.#bashDecision(`ssh ${params.host}`) : { tier: "exec" };
 			case "send":
-				return { tier: "exec", policyKey: "bash" };
+				return { tier: "exec" };
 			default:
 				return this.#bashDecision(params.command ?? "");
 		}
@@ -204,10 +204,7 @@ export class TerminalTool implements AgentTool<typeof terminalSchema, TerminalTo
 	/** The `bash` tool's decision for `command`, scoped to the user's bash policy. */
 	#bashDecision(command: string): ToolApprovalDecision {
 		const bash = this.options.bashApproval();
-		const decision = typeof bash === "function" ? bash({ command }) : (bash ?? "exec");
-		return typeof decision === "string"
-			? { tier: decision, policyKey: "bash" }
-			: { ...decision, policyKey: decision.policyKey ?? "bash" };
+		return typeof bash === "function" ? bash({ command }) : (bash ?? "exec");
 	}
 
 	#list(): AgentToolResult<TerminalToolDetails> {

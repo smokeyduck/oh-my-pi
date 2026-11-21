@@ -55,7 +55,7 @@ function classifyToolSource(session: AgentSession, name: string): RpcToolSource 
 
 /**
  * `/tools` parity (command-controller's handleToolsCommand): active
- * top-level tools with their descriptions, then xd:// mounted entries with
+ * top-level tools with their descriptions, then mounted tool commands with
  * their prompt summaries. Both resolve source through the canonical registry.
  */
 export function buildRpcActiveTools(session: AgentSession): RpcActiveToolsResult {
@@ -64,7 +64,7 @@ export function buildRpcActiveTools(session: AgentSession): RpcActiveToolsResult
 		description: tool.description,
 		source: classifyToolSource(session, tool.name),
 	}));
-	for (const mounted of session.getXdevToolEntries()) {
+	for (const mounted of session.getToolCommandEntries()) {
 		tools.push({
 			name: mounted.name,
 			description: mounted.summary,

@@ -1,18 +1,17 @@
-import { PROPOSE_DEVICE_NAME } from "@oh-my-pi/pi-tui/tools/resolve";
 /**
  * Structured plan approval for RPC mode.
  *
  * The TUI approves plans through an overlay (`InteractiveMode.handlePlanApproval`);
  * print mode auto-aborts on proposal. RPC mode needs a third path: the agent's
- * `write` to `xd://propose` must not hit `dispatchResolutionDevice`'s "No plan is
- * awaiting approval" throw, and the host must be able to review and resolve the
- * plan over the wire.
+ * `propose` command must not hit the resolution device's "No plan is awaiting
+ * approval" throw, and the host must be able to review and resolve the plan over
+ * the wire.
  *
  * This controller mirrors the two existing non-TUI precedents:
  * - print-mode's proposal handler (`preparePlanForReview` + plan-file promotion
  *   + mode_change journal entry), and
  * - the shared silent-abort on proposal (`markPlanInternalAbortPending` + `abort`)
- *   so the model cannot re-dispatch `xd://propose` in a loop while the host decides.
+ *   so the model cannot re-dispatch `propose` in a loop while the host decides.
  *
  * Approval drives the same session methods as `InteractiveMode.#approvePlan`:
  * exit plan mode, (optionally) reset/compact context, pin the plan reference,
@@ -30,7 +29,7 @@ import { planSaveFileName } from "../../plan-mode/plan-save";
 import planModeApprovedPrompt from "../../prompts/system/plan-mode-approved.md" with { type: "text" };
 import planModeCompactInstructionsPrompt from "../../prompts/system/plan-mode-compact-instructions.md" with { type: "text" };
 import type { AgentSession, AgentSessionEvent } from "../../session/agent-session";
-import { type PlanProposalHandler, writeDeviceDispatch } from "../../tools/resolve";
+import { type PlanProposalHandler, proposeDispatchDetails } from "../../tools/resolve";
 import type { RpcPlanApprovalOption, RpcPlanApprovalResult, RpcPlanProposalFrame } from "./rpc-types";
 
 /** Options advertised on the `plan_proposal` frame (TUI review parity). */
@@ -135,8 +134,7 @@ export class RpcPlanApprovalController {
 	 */
 	async handleSessionEvent(event: AgentSessionEvent): Promise<void> {
 		if (event.type !== "tool_execution_end" || event.isError) return;
-		const dispatch = writeDeviceDispatch(event.toolName, event.result);
-		if (dispatch?.tool !== PROPOSE_DEVICE_NAME || dispatch.mode !== "execute") return;
+		if (proposeDispatchDetails(event.toolName, event.result) === undefined) return;
 		const pending = this.#pending;
 		if (!pending) return;
 		const planContent =

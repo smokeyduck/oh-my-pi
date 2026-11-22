@@ -474,7 +474,12 @@ async function buildLocalHostAddon(host: HostInfo, destDir: string): Promise<voi
 	const exitCode = await proc.exited;
 	if (exitCode !== 0) process.exit(exitCode || 1);
 
-	const filename = resolveLocalHostAddon(host).filename;
+	// Match build-bindings.ts: an AVX2 host can explicitly build baseline.
+	const variantOverride = Bun.env.PI_NATIVE_VARIANT?.trim();
+	const filename = resolveLocalHostAddon({
+		...host,
+		avx2: variantOverride === "modern" ? true : variantOverride === "baseline" ? false : host.avx2,
+	}).filename;
 	const builtPath = path.join(repoRoot, "packages/natives/native", filename);
 	if (path.dirname(builtPath) !== destDir) {
 		await fs.mkdir(destDir, { recursive: true });

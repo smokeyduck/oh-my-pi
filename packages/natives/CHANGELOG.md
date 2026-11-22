@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Fixed local native builds with `PI_NATIVE_VARIANT=baseline` probing the modern addon on AVX2 hosts instead of the freshly built baseline addon.
 - Fixed Linux SQLite OFD lock protection failing when the runtime executable path contains spaces; `/proc/self/maps` parsing now preserves the complete pathname.
 - Fixed `grep()` with a match limit resolving with a short result when its directory walk panicked; it now rejects with the panic ([#20013](https://github.com/can1357/oh-my-pi/pull/20013) by [@sjawhar](https://github.com/sjawhar))
 - Fixed a use-after-free in `grep()`, `glob()`, `fuzzyFind()`, `astGrep()` and `astEdit()` when a timeout or an abort cancelled them just after they started ([#20014](https://github.com/can1357/oh-my-pi/pull/20014) by [@sjawhar](https://github.com/sjawhar))

@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setSystemTime, test, vi } from "bun:test";
 import * as compatAuth from "@oh-my-pi/pi-catalog/compat/auth";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -321,6 +321,44 @@ describe("ModelRegistry runtime discovery", () => {
 		expect(await registry.refreshIfStale()).toBe(true);
 		expect(registry.find("gateway", "added-model")).toBeDefined();
 		expect(await registry.refreshIfStale()).toBe(false);
+	});
+
+	test("refreshIfStale picks up models another process discovered once the catalog is a TTL old", async () => {
+		writeRawModelsJson({
+			gateway: {
+				baseUrl: "http://127.0.0.1:9992",
+				api: "openai-completions",
+				auth: "none",
+				discovery: { type: "openai-models-list" },
+			},
+		});
+		let served = ["old-model"];
+		const fetchMock: FetchImpl = async input =>
+			String(input) === "http://127.0.0.1:9992/v1/models"
+				? Response.json({ data: served.map(id => ({ id, context_length: 65_536 })) })
+				: new Response("", { status: 404 });
+		const startedAt = Date.now();
+		try {
+			setSystemTime(new Date(startedAt));
+			const session = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+			await session.refresh("online-if-uncached");
+
+			// A later process (`omp models refresh`, a new session) sees the provider's new model.
+			served = ["old-model", "new-model"];
+			await new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock }).refresh("online");
+
+			setSystemTime(new Date(startedAt + 2 * 60 * 60 * 1000 - 1));
+			expect(await session.refreshIfStale()).toBe(false);
+			expect(session.find("gateway", "new-model")).toBeUndefined();
+
+			setSystemTime(new Date(startedAt + 2 * 60 * 60 * 1000));
+			session.suppressSelector("gateway/old-model", startedAt + 3 * 60 * 60 * 1000);
+			expect(await session.refreshIfStale()).toBe(true);
+			expect(session.find("gateway", "new-model")).toBeDefined();
+			expect(session.isSelectorSuppressed("gateway/old-model")).toBe(true);
+		} finally {
+			setSystemTime();
+		}
 	});
 
 	test("refreshProvider online refreshes expired anthropic OAuth before model discovery", async () => {
@@ -3571,6 +3609,118 @@ describe("ModelRegistry runtime discovery", () => {
 		expect(rosterFor("chat")).toEqual(["multimodal-chat", "speech-or-music", "vision-chat"]);
 		expect(rosterFor("embedding")).toEqual(["bare-embedder", "openrouter/openai/text-embedding-3-small"]);
 		expect(rosterFor("image")).toEqual(["image-generator"]);
+	});
+
+	test("openai-models-list routes gateway speech and transcription rows by their declared modalities", async () => {
+		writeRawModelsJson({
+			"gateway-test": {
+				baseUrl: "http://127.0.0.1:9993",
+				api: "openai-completions",
+				auth: "none",
+				discovery: { type: "openai-models-list" },
+			},
+		});
+		const fetchMock: FetchImpl = async input => {
+			const url = String(input);
+			if (url === "http://127.0.0.1:9993/v1/models") {
+				return new Response(
+					JSON.stringify({
+						data: [
+							// Poe's rows, verbatim: a TTS voice and a music generator declare
+							// the same `text->audio`, and Poe serves both on chat completions.
+							{
+								id: "orpheus-tts",
+								architecture: {
+									input_modalities: ["text"],
+									output_modalities: ["audio"],
+									modality: "text->audio",
+								},
+							},
+							{
+								id: "lyria",
+								architecture: {
+									input_modalities: ["text"],
+									output_modalities: ["audio"],
+									modality: "text->audio",
+								},
+							},
+							{
+								id: "vendor/audio-reader",
+								architecture: { input_modalities: ["audio"], output_modalities: ["text"] },
+							},
+							// OpenRouter's TTS and STT rows, verbatim from its roster.
+							{
+								id: "speechify/simba-3.5",
+								architecture: {
+									modality: "text->speech",
+									input_modalities: ["text"],
+									output_modalities: ["speech"],
+								},
+							},
+							{
+								id: "x-ai/grok-stt-2.0",
+								architecture: {
+									modality: "audio->transcription",
+									input_modalities: ["audio"],
+									output_modalities: ["transcription"],
+								},
+							},
+							{ id: "openrouter/vendor/tts-lite", architecture: { modality: "text->speech" } },
+							// Nothing declared: stays chat, whatever the id suggests.
+							{ id: "vendor/flash-tts", supported_methods: ["generateContent"] },
+							{
+								id: "vendor/chat",
+								architecture: { modality: "text+image->text", output_modalities: ["text"] },
+							},
+							{
+								id: "vendor/voice-chat",
+								architecture: { input_modalities: ["text", "audio"], output_modalities: ["text", "audio"] },
+							},
+							{ id: "vendor/plain-chat" },
+						],
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+			throw new Error(`Unexpected URL: ${url}`);
+		};
+		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		await registry.refresh();
+		// Audio output, or text from audio input, names no endpoint: chat API.
+		for (const id of ["orpheus-tts", "lyria", "vendor/audio-reader"]) {
+			const model = registry.find("gateway-test", id);
+			expect(model?.kind).toBeUndefined();
+			expect(model?.api).toBe("openai-completions");
+		}
+		expect(registry.find("gateway-test", "speechify/simba-3.5")).toMatchObject({
+			kind: "tts",
+			api: "openai-speech",
+			baseUrl: "http://127.0.0.1:9993/v1",
+			supportsTools: false,
+		});
+		expect(registry.find("gateway-test", "x-ai/grok-stt-2.0")).toMatchObject({
+			kind: "stt",
+			api: "openai-transcriptions",
+			baseUrl: "http://127.0.0.1:9993/v1",
+			supportsTools: false,
+		});
+		const rosterFor = (kind: ModelKind) =>
+			registry
+				.getAll(kind)
+				.filter(model => model.provider === "gateway-test")
+				.map(model => model.id)
+				.sort();
+		expect(rosterFor("chat")).toEqual([
+			"lyria",
+			"orpheus-tts",
+			"vendor/audio-reader",
+			"vendor/chat",
+			"vendor/flash-tts",
+			"vendor/plain-chat",
+			"vendor/voice-chat",
+		]);
+		expect(rosterFor("tts")).toEqual(["openrouter/vendor/tts-lite", "speechify/simba-3.5"]);
+		expect(rosterFor("stt")).toEqual(["x-ai/grok-stt-2.0"]);
 	});
 
 	test("openai-models-list with injectV1: false hits {baseUrl}/models verbatim", async () => {

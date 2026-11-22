@@ -12,7 +12,6 @@ export type OmfgPanelState = "generating" | "validating" | "confirming" | "savin
 
 export interface OmfgPanelResult {
 	state: OmfgPanelState;
-	savedPath?: string;
 	errorMessage?: string;
 }
 /** States with work still in flight (the sheet head shows the live spinner). */
@@ -99,7 +98,7 @@ export class OmfgPanelComponent extends OverlayPanel {
 	}
 
 	getResult(): OmfgPanelResult {
-		return { state: this.#state, savedPath: this.#savedPath, errorMessage: this.#errorMessage };
+		return { state: this.#state, errorMessage: this.#errorMessage };
 	}
 
 	close(): void {

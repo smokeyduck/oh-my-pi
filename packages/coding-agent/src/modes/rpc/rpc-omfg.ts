@@ -34,7 +34,7 @@ export async function runRpcOmfg(
 	const result = await new OmfgController(context).startAndWait(complaint);
 	if (!result) throw new Error(diagnostic);
 	if (result.state === "error") throw new Error(result.errorMessage ?? diagnostic);
-	if (result.state === "saved") return { state: "saved", savedPath: result.savedPath };
+	if (result.state === "saved") return result;
 	if (result.state === "rejected") return { state: "rejected" };
 	if (result.state === "aborted") return { state: "aborted" };
 	throw new Error(`Unexpected /omfg terminal state: ${result.state}`);

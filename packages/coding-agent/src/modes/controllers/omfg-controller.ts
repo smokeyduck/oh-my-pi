@@ -22,6 +22,7 @@ interface OmfgRequest {
 	abortController: AbortController;
 	complaint: string;
 	run?: Promise<void>;
+	savedPath?: string;
 }
 
 interface OmfgCandidate extends ParsedGeneratedRule {
@@ -95,11 +96,14 @@ export class OmfgController {
 		void request.run;
 	}
 
-	async startAndWait(complaint: string): Promise<OmfgPanelResult | undefined> {
+	async startAndWait(
+		complaint: string,
+	): Promise<OmfgPanelResult | { state: "saved"; savedPath: string } | undefined> {
 		await this.start(complaint);
 		const request = this.#activeRequest;
 		if (!request?.run) return undefined;
 		await request.run;
+		if (request.savedPath !== undefined) return { state: "saved", savedPath: request.savedPath };
 		return request.component.getResult();
 	}
 
@@ -284,6 +288,7 @@ export class OmfgController {
 				target.level,
 			);
 			this.#registerLive(savedRule);
+			request.savedPath = target.filePath;
 			// Dismiss on success; errors keep the panel so the user can read them.
 			this.#closeActiveRequest({ abort: false });
 			this.ctx.showStatus(`Saved TTSR rule to ${shortenPath(target.filePath)}`);

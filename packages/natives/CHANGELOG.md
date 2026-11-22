@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Linux SQLite OFD lock protection failing when the runtime executable path contains spaces; `/proc/self/maps` parsing now preserves the complete pathname.
+
 ## [19.1.0] - 2026-11-21
 
 ### Added

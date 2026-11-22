@@ -333,6 +333,16 @@ export function getConfigDirName(): string {
 	return process.env.PI_CONFIG_DIR || CONFIG_DIR_NAME;
 }
 
+/** Workspace namespace; deliberately independent of the global config root. */
+export function getProjectConfigDirName(): string {
+	const name = process.env.PI_PROJECT_CONFIG_DIR;
+	if (!name) return CONFIG_DIR_NAME;
+	if (name === "." || name === ".." || /[/\\\x00]/.test(name) || path.isAbsolute(name)) {
+		throw new Error("PI_PROJECT_CONFIG_DIR must be a single relative directory name");
+	}
+	return name;
+}
+
 // =============================================================================
 // DirResolver — cached, XDG-aware path resolution
 // =============================================================================
@@ -641,7 +651,7 @@ export function getAgentDir(): string {
 
 /** Get the project-local config directory (.omp). */
 export function getProjectAgentDir(cwd: string = getProjectDir()): string {
-	return path.join(cwd, CONFIG_DIR_NAME);
+	return path.join(cwd, getProjectConfigDirName());
 }
 
 // =============================================================================
@@ -823,12 +833,15 @@ export function getPuppeteerDir(): string {
 }
 
 /**
- * Get where the WebKit browser engine's host executable is installed: `ABHost` (`ABHost.exe` on Windows)
- * in the ABKit engine directory `~/.o2/lib/abkit`. The location is shared with Tern, so it is outside omp's
- * own directories.
+ * Get the WebKit host executable. Native-only application launches keep their
+ * engine cache private; default CLI installs remain shared with Tern.
  */
 export function getWebKitHostPath(platform: NodeJS.Platform = process.platform): string {
-	return path.join(os.homedir(), ".o2", "lib", "abkit", platform === "win32" ? "ABHost.exe" : "ABHost");
+	const root =
+		process.env.PI_CONFIG_SOURCES === "native"
+			? dirs.rootSubdir(path.join("cache", "abkit"), "cache")
+			: path.join(os.homedir(), ".o2", "lib", "abkit");
+	return path.join(root, platform === "win32" ? "ABHost.exe" : "ABHost");
 }
 
 /** Get the browser relay extension install directory (~/.omp/browser-relay). */

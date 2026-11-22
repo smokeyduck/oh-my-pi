@@ -26,6 +26,10 @@ The agent/root locations respect profiles, `PI_CONFIG_DIR`, and—only for the d
 
 Additional rule inside each `.env` file: every `OMP_*` key is mirrored to its `PI_*` alias, and that mirrored value replaces a same-file `PI_*` value. This mirroring applies to parsed dotenv files, not arbitrary variables inherited from the parent process.
 
+Isolated hosts may set `PI_PROJECT_CONFIG_DIR` to one relative directory basename (for example `.wisa-studio` or `.wisa-studio-dev`); workspace settings, discovery, plugins, secrets, plans and generated state then use that namespace instead of `.omp`. The default CLI remains `.omp`. This is independent of the global `PI_CONFIG_DIR` and absolute `PI_CODING_AGENT_DIR`.
+
+`PI_CONFIG_SOURCES=native` disables automatic foreign-tool configuration discovery (including standalone project MCP files) and home/project dotenv loading. Native profile dotenv files remain available. Explicit `enabledProviders`, source selections and configured file paths still opt in; standalone project `AGENTS.md` and OS SSH configuration remain shared. Inherited shell credentials remain available. Launchers using Bun must also disable its pre-start dotenv autoload (`--no-env-file`). This isolates application data, not arbitrary file access by user-authorized tools.
+
 Variables declared on a setting definition (see [settings precedence](./settings.md#precedence)) outrank every settings file but yield to a runtime override such as a CLI flag. They are parsed by the setting's type unless noted otherwise. Boolean ones (`PI_PY`, `PI_JS`, `PI_INTENT_TRACING`, `PI_AUTO_QA`, `HINDSIGHT_AUTO_RECALL`, …) follow `parseFlag`: an empty value is ignored, so the setting applies; `1`, `y`, `true`, `yes`, and `on` (all-lowercase or all-uppercase) mean true; any other non-empty value means false.
 
 ---

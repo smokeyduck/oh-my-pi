@@ -36,6 +36,7 @@ import { JSONC, YAML } from "bun";
 import { invalidate as invalidateCapabilityFsCache } from "../capability/fs";
 import { type Settings as SettingsCapabilityItem, settingsCapability } from "../capability/settings";
 import type { ModelRole } from "../config/model-roles";
+import { getAllProvidersInfo, isProviderEnabled } from "../capability";
 import { loadCapability } from "../discovery";
 import { AgentStorage, type AgentStorageApi } from "../session/agent-storage";
 import { type CompactionMethod, DEFAULT_COMPACTION_METHOD_ORDER } from "../session/compaction-methods";
@@ -2342,6 +2343,14 @@ export class Settings {
 		// the persist steps themselves remain sequential. Wait for both branches
 		// to settle so simultaneous failures produce one catchable error without
 		// abandoning the other rejection.
+		if (process.env.PI_CONFIG_SOURCES === "native") {
+			if (this.#persist) await this.#loadGlobalSettings();
+			this.#configOverlay = await this.#loadConfigOverlays();
+			this.#project = this.#adoptProjectRead(await this.#readProjectSettings(true));
+			this.#rebuildMerged();
+			this.#validateAll();
+			return this;
+		}
 		const [globalResult, projectResult] = await Promise.allSettled([
 			this.#persist ? this.#loadGlobalSettings() : Promise.resolve(),
 			this.#readProjectSettings(true),
@@ -2371,6 +2380,14 @@ export class Settings {
 	}
 
 	async #loadReadOnly(): Promise<Settings> {
+		if (process.env.PI_CONFIG_SOURCES === "native") {
+			this.#global = (await this.#loadExistingMainYaml()) ?? {};
+			this.#configOverlay = await this.#loadConfigOverlays();
+			this.#project = this.#adoptProjectRead(await this.#readProjectSettings(true));
+			this.#rebuildMerged();
+			this.#validateAll();
+			return this;
+		}
 		const [globalResult, projectResult] = await Promise.allSettled([
 			this.#loadExistingMainYaml(),
 			this.#readProjectSettings(true),
@@ -2832,13 +2849,38 @@ export class Settings {
 		invalidateCapabilityFsCache(path.join(projectConfigDir, "settings.json"));
 		invalidateCapabilityFsCache(path.join(discoveryCwd, ".claude", "settings.json"));
 		for (const sourcePath of this.#projectSourcePaths) invalidateCapabilityFsCache(sourcePath);
+		// A native config this instance moved aside reads as missing until a save recreates it;
+		// keep its last good contents, as `#saveProjectNow` does.
+		const nativeProject = quarantineInvalid
+			? await this.#loadYaml(projectConfigPath)
+			: (this.#unwrapYamlLoadResult(projectConfigPath, await this.#loadYamlIfPresent(projectConfigPath, false)) ??
+				(this.#quarantinedYamlTargets.has(projectConfigPath) ? structuredClone(this.#projectFileSettings) : {}));
 		let projectItems: SettingsCapabilityItem[] = [];
 		let rejectedWarnings: string[] | undefined;
 		let warningsSeen = this.#projectSettingsWarningsSeen;
 		try {
+			const explicitSources =
+				process.env.PI_CONFIG_SOURCES === "native"
+					? getByPath(this.#deepMerge(this.#deepMerge(this.#global, nativeProject), this.#configOverlay), [
+							"enabledProviders",
+						])
+					: undefined;
 			const result = await loadCapability(settingsCapability.id, {
 				cwd: discoveryCwd,
 				includeDisabledProviders: true,
+				...(Array.isArray(explicitSources)
+					? {
+							providers: getAllProvidersInfo()
+								.filter(
+									p =>
+										isProviderEnabled(p.id) ||
+										explicitSources.includes(p.id) ||
+										explicitSources.includes("*") ||
+										explicitSources.includes("all"),
+								)
+								.map(p => p.id),
+						}
+					: {}),
 			});
 			// `loadCapability` aggregates warnings across every level, but this
 			// method only merges project items — user-level parse failures belong
@@ -2868,12 +2910,6 @@ export class Settings {
 		if (rejectedWarnings) {
 			throw new Error(`Project settings failed to parse: ${rejectedWarnings.join("; ")}`);
 		}
-		// A native config this instance moved aside reads as missing until a save recreates it;
-		// keep its last good contents, as `#saveProjectNow` does.
-		const nativeProject = quarantineInvalid
-			? await this.#loadYaml(projectConfigPath)
-			: (this.#unwrapYamlLoadResult(projectConfigPath, await this.#loadYamlIfPresent(projectConfigPath, false)) ??
-				(this.#quarantinedYamlTargets.has(projectConfigPath) ? structuredClone(this.#projectFileSettings) : {}));
 		return {
 			cwd,
 			quarantineInvalid,

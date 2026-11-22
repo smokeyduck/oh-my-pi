@@ -37,6 +37,7 @@ import { Effort, THINKING_EFFORTS } from "@oh-my-pi/pi-catalog/effort";
 import { parseServiceTierIds } from "@oh-my-pi/pi-catalog/utils";
 import { isRecord, logger } from "@oh-my-pi/pi-utils";
 import type { ProviderDiscovery } from "./models-config-schema";
+import { isWisaGateway, wisaModelApi } from "./wisa-routing";
 
 // Default cap on `max_tokens` for auto-discovered models that do not advertise
 // their own output limit (OpenAI-models-list, Ollama, llama.cpp, new-api/
@@ -206,6 +207,8 @@ export function discoveryDefaultMaxTokens(api: Api | undefined): number {
 export interface DiscoveryProviderConfig {
 	provider: string;
 	api: Api;
+	/** Internal: provider API was omitted, so Wisa's client-facing family defaults apply. */
+	wisaDefaults?: boolean;
 	baseUrl?: string;
 	headers?: Record<string, string>;
 	/** Force bearer auth even when the selected protocol has a native key header. */
@@ -512,6 +515,25 @@ function extractLlamaCppInputCapabilities(payload: Record<string, unknown>): ("t
 }
 
 export function discoverModelsByProviderType(
+	providerConfig: DiscoveryProviderConfig,
+	ctx: DiscoveryContext,
+): Promise<Model<Api>[]> {
+	return discoverModelsByProviderTypeRaw(providerConfig, ctx).then(models =>
+		applyWisaDefaults(providerConfig, models),
+	);
+}
+
+export function applyWisaDefaults(config: DiscoveryProviderConfig, models: Model<Api>[]): Model<Api>[] {
+	if (!isWisaGateway(config.provider, config.baseUrl)) return models;
+	return models.map(model => {
+		const api = config.wisaDefaults ? wisaModelApi(model.id) : config.api;
+		return api === model.api
+			? model
+			: buildModel({ ...model, api, kind: runnerApiKind(api), compat: model.compatConfig } as ModelSpec<Api>);
+	});
+}
+
+function discoverModelsByProviderTypeRaw(
 	providerConfig: DiscoveryProviderConfig,
 	ctx: DiscoveryContext,
 ): Promise<Model<Api>[]> {
@@ -1390,9 +1412,11 @@ export async function discoverOpenAIModelsList(
 			continue;
 		}
 		const api =
-			providerConfig.discovery.type === "litellm"
-				? resolveLiteLLMApi(item, id, providerConfig.api)
-				: providerConfig.api;
+			providerConfig.wisaDefaults && isWisaGateway(providerConfig.provider, providerConfig.baseUrl)
+				? wisaModelApi(id)
+				: providerConfig.discovery.type === "litellm"
+					? resolveLiteLLMApi(item, id, providerConfig.api)
+					: providerConfig.api;
 		const contextWindow = reportedContextWindow ?? DISCOVERY_DEFAULT_CONTEXT_WINDOW;
 		const capabilities = isRecord(item.capabilities) ? item.capabilities : undefined;
 		const thinkingCapability = capabilities?.thinking ?? capabilities?.reasoning ?? capabilities?.extended_thinking;

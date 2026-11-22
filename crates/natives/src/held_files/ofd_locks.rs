@@ -91,9 +91,13 @@ fn mappings() -> Vec<Mapping> {
 	maps
 		.lines()
 		.filter_map(|line| {
-			let mut fields = line.split_whitespace();
+			let mut fields = line.split_ascii_whitespace();
 			let (range, perms) = (fields.next()?, fields.next()?);
-			let path = fields.nth(3).unwrap_or("").to_owned();
+			let inode = fields.nth(2)?;
+			// The five metadata fields are whitespace-delimited; the remaining
+			// pathname is not (compiled sidecars often live under "New Volume").
+			let path_start = inode.as_ptr() as usize - line.as_ptr() as usize + inode.len();
+			let path = line[path_start..].trim_start().to_owned();
 			let (start, end) = range.split_once('-')?;
 			let perms = perms.as_bytes();
 			if perms.first() != Some(&b'r') {

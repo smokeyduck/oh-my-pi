@@ -88,3 +88,43 @@ test.skipIf(process.platform !== "linux")(
 		}
 	},
 );
+
+test.skipIf(process.platform !== "linux")(
+	"installs OFD locks when the runtime pathname contains spaces and Unicode",
+	() => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-ofd-path-"));
+		try {
+			const runtimeDir = path.join(dir, "New Volume 模型");
+			fs.mkdirSync(runtimeDir);
+			const runtime = path.join(runtimeDir, "bun");
+			fs.copyFileSync(process.execPath, runtime);
+			fs.chmodSync(runtime, 0o755);
+			const code = `
+			import { Database } from "bun:sqlite";
+			import * as fs from "node:fs";
+			import { installSqliteLockShim } from ${JSON.stringify(path.resolve(import.meta.dir, "../native/sqlite-locks.js"))};
+			if (!installSqliteLockShim()) throw new Error("SQLite lock shim unavailable");
+			const file = ${JSON.stringify(path.join(dir, "fresh.db"))};
+			const db = new Database(file);
+			try {
+				db.run("PRAGMA journal_mode=WAL");
+				db.run("CREATE TABLE t(x)");
+				const inodes = [file, file + "-shm"].map(p => ":" + fs.statSync(p).ino);
+				const locks = () => fs.readFileSync("/proc/locks", "utf8").split("\\n")
+					.map(line => line.replace("->", "").trim().split(/\\s+/))
+					.filter(fields => inodes.some(ino => fields[5]?.endsWith(ino)))
+					.map(fields => fields[1]);
+				if (JSON.stringify(locks()) !== '["OFDLCK","OFDLCK"]') throw new Error("OFD locks missing");
+				await Bun.file(file).bytes();
+				fs.readFileSync(file + "-shm");
+				if (JSON.stringify(locks()) !== '["OFDLCK","OFDLCK"]') throw new Error("OFD locks released");
+			} finally { db.close(); }
+		`;
+			const result = Bun.spawnSync([runtime, "-e", code]);
+			expect(new TextDecoder().decode(result.stderr)).toBe("");
+			expect(result.exitCode).toBe(0);
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	},
+);

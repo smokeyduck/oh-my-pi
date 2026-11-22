@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `getProjectConfigDirName()` and `PI_PROJECT_CONFIG_DIR` for isolated workspace namespaces. `PI_CONFIG_SOURCES=native` skips ambient home/project dotenv imports while retaining the active profile's dotenv files.
+
+### Fixed
+
+- Native-only application launches keep downloaded WebKit engines in their isolated cache instead of Tern's shared `~/.o2/lib/abkit` installation.
+
 ## [19.1.0] - 2026-11-21
 
 ### Added

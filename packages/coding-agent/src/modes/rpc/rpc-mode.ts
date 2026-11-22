@@ -3709,7 +3709,8 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 				const models = await session.modelRegistry.listEndpointModels(
 					{
 						provider: command.provider ?? "custom",
-						api: command.api as Api,
+						api: (command.api || "openai-completions") as Api,
+						wisaDefaults: command.api === "",
 						baseUrl: command.baseUrl,
 						authHeader: command.authHeader,
 						headers: await resolveConfigHeaders(command.headers),

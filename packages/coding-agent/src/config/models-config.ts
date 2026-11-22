@@ -14,6 +14,7 @@ import {
 	getModelsConfigSchemaBundle,
 	supportedInputModalities,
 } from "./models-config-schema-bundle";
+import { isWisaGateway } from "./wisa-routing";
 
 export type ProviderValidationMode = "models-config" | "runtime-register";
 
@@ -165,7 +166,13 @@ export function validateProviderConfiguration(
 		}
 	}
 
-	if (mode === "models-config" && config.discovery && !config.api && config.discovery.type !== "proxy") {
+	if (
+		mode === "models-config" &&
+		config.discovery &&
+		!config.api &&
+		config.discovery.type !== "proxy" &&
+		!isWisaGateway(providerName, config.baseUrl)
+	) {
 		throw new Error(`Provider ${providerName}: "api" is required when discovery is enabled at provider level.`);
 	}
 

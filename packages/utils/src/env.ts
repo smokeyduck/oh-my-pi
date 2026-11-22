@@ -287,10 +287,10 @@ export function parseEnvFile(filePath: string): Record<string, string> {
 }
 
 // Eagerly parse the user's $HOME/.env and the current project's .env (from cwd)
-const homeEnv = parseEnvFile(path.join(os.homedir(), ".env"));
+const homeEnv = process.env.PI_CONFIG_SOURCES === "native" ? {} : parseEnvFile(path.join(os.homedir(), ".env"));
 const piEnv = parseEnvFile(path.join(getConfigRootDir(), ".env"));
 const agentEnv = parseEnvFile(path.join(getAgentDir(), ".env"));
-const projectEnv = parseEnvFile(path.join(getProjectDir(), ".env"));
+const projectEnv = process.env.PI_CONFIG_SOURCES === "native" ? {} : parseEnvFile(path.join(getProjectDir(), ".env"));
 
 for (const key of Object.keys(Bun.env)) {
 	const value = Bun.env[key];

@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { FileType, glob } from "@oh-my-pi/pi-natives";
 import {
-	CONFIG_DIR_NAME,
+	getProjectConfigDirName,
 	getAgentDir,
 	getConfigDirName,
 	getPluginsDir,
@@ -15,7 +15,7 @@ import {
 	pathIsWithin,
 	tryParseJson,
 } from "@oh-my-pi/pi-utils";
-import { isUserSourceEnabled } from "../capability";
+import { isProviderEnabled, isUserSourceEnabled } from "../capability";
 import type { ContextFile } from "../capability/context-file";
 import type { ExtensionModule } from "../capability/extension-module";
 import { invalidate as invalidateFsCache, readDirEntries, readFile } from "../capability/fs";
@@ -48,7 +48,9 @@ export const SOURCE_PATHS = {
 		get userAgent() {
 			return `${getConfigDirName()}/agent`;
 		},
-		projectDir: CONFIG_DIR_NAME,
+		get projectDir() {
+			return getProjectConfigDirName();
+		},
 	},
 	claude: {
 		userBase: ".claude",
@@ -1116,7 +1118,7 @@ async function resolveProjectRegistryPath(cwd: string, ceilings: ReadonlySet<str
 	}
 
 	// Existing .omp/ directories still win, even above the git root, except foreign user roots.
-	const configDirName = getConfigDirName();
+	const configDirName = getProjectConfigDirName();
 	let aboveGitRoot = nearestGitRoot === null;
 	dir = path.resolve(cwd);
 	while (!ceilings.has(normalizePathForComparison(dir))) {
@@ -1138,7 +1140,7 @@ async function resolveProjectRegistryPath(cwd: string, ceilings: ReadonlySet<str
 		dir = parent;
 	}
 
-	return gitAnchor ? path.join(gitAnchor, getConfigDirName(), "plugins", "installed_plugins.json") : null;
+	return gitAnchor ? path.join(gitAnchor, getProjectConfigDirName(), "plugins", "installed_plugins.json") : null;
 }
 
 /**
@@ -1160,10 +1162,10 @@ export async function resolveOrDefaultProjectRegistryPath(cwd: string): Promise<
 	if (
 		ceilings.has(normalizePathForComparison(cwd)) ||
 		isUserConfigRoot(cwd) ||
-		(await isForeignUserConfigRoot(cwd, getConfigDirName()))
+		(await isForeignUserConfigRoot(cwd, getProjectConfigDirName()))
 	)
 		return undefined;
-	return path.join(cwd, getConfigDirName(), "plugins", "installed_plugins.json");
+	return path.join(cwd, getProjectConfigDirName(), "plugins", "installed_plugins.json");
 }
 
 async function canonicalClaudeProjectPath(projectPath: string): Promise<string | null> {
@@ -1242,7 +1244,10 @@ async function resolvePluginRegistryFiles(home: string, cwd: string | undefined)
 		projectPath && normalizePathForComparison(projectPath) !== normalizePathForComparison(ompRegistryPath)
 			? projectPath
 			: null;
-	const files = [path.join(claudeConfigDir, "plugins", "installed_plugins.json"), ompRegistryPath];
+	const files = [ompRegistryPath];
+	if (isProviderEnabled("claude-plugins") || isProviderEnabled("claude")) {
+		files.push(path.join(claudeConfigDir, "plugins", "installed_plugins.json"));
+	}
 	if (resolvedProjectPath) files.push(resolvedProjectPath);
 	return { claudeConfigDir, ompRegistryPath, resolvedProjectPath, files };
 }
@@ -1332,7 +1337,10 @@ async function readPluginRoots(home: string, cwd: string | undefined, revalidate
 	const activeClaudeProjectPath = projectRoot ? await canonicalClaudeProjectPath(projectRoot) : null;
 	const canonicalCwd = cwd ? await canonicalClaudeProjectPath(cwd) : null;
 	const settingsDirs = [...new Set([activeClaudeProjectPath, canonicalCwd].filter((d): d is string => !!d))];
-	const enabledOverrides = await readClaudeEnabledPlugins(claudeConfigDir, settingsDirs);
+	const enabledOverrides =
+		isProviderEnabled("claude-plugins") || isProviderEnabled("claude")
+			? await readClaudeEnabledPlugins(claudeConfigDir, settingsDirs)
+			: { enabled: new Map<string, boolean>(), sources: [] as string[] };
 	const cacheKey = `${claudeConfigDir}:${ompRegistryPath}:${resolvedProjectPath ?? ""}:${activeClaudeProjectPath ?? ""}:${canonicalCwd ?? ""}:${enabledOverrides.sources.join("|")}`;
 	const cached = pluginRootsCache.get(cacheKey);
 	if (cached) {
@@ -1389,7 +1397,8 @@ async function loadClaudePluginRoots({
 
 	// ── Claude Code registry ──────────────────────────────────────────────────
 	const registryPath = path.join(claudeConfigDir, "plugins", "installed_plugins.json");
-	const content = await readFile(registryPath);
+	const content =
+		isProviderEnabled("claude-plugins") || isProviderEnabled("claude") ? await readFile(registryPath) : null;
 
 	if (content) {
 		const registry = parseClaudePluginsRegistry(content);

@@ -84,7 +84,9 @@ import {
 	resolveConfigHeaders,
 	resolveConfigValue,
 } from "./resolve-config-value";
+import { isWisaGateway } from "./wisa-routing";
 import {
+	applyWisaDefaults,
 	DISCOVERY_DEFAULT_MAX_TOKENS,
 	type DiscoveryContext,
 	type DiscoveryProviderConfig,
@@ -2239,6 +2241,7 @@ export class ModelRegistry {
 	}
 
 	#normalizeDiscoverableModels(providerConfig: DiscoveryProviderConfig, models: Model<Api>[]): Model<Api>[] {
+		models = applyWisaDefaults(providerConfig, models);
 		const withDecoderMetadata =
 			providerConfig.discovery.type === "ollama" ||
 			providerConfig.discovery.type === "llama.cpp" ||
@@ -2478,7 +2481,12 @@ export class ModelRegistry {
 				keylessProviders.add(providerName);
 			}
 
-			if (providerConfig.discovery && (providerConfig.api || providerConfig.discovery.type === "proxy")) {
+			if (
+				providerConfig.discovery &&
+				(providerConfig.api ||
+					providerConfig.discovery.type === "proxy" ||
+					isWisaGateway(providerName, providerConfig.baseUrl))
+			) {
 				const disableStrictCompat = providerConfig.disableStrictTools ? { disableStrictTools: true } : undefined;
 				discoverableProviders.push({
 					provider: providerName,
@@ -2486,6 +2494,7 @@ export class ModelRegistry {
 					// supported_endpoint_types; the provider-level api is only a
 					// fallback for entries that don't advertise one.
 					api: (providerConfig.api ?? "openai-completions") as Api,
+					wisaDefaults: !providerConfig.api && isWisaGateway(providerName, providerConfig.baseUrl),
 					baseUrl: providerConfig.baseUrl,
 					headers: providerConfig.headers,
 					authHeader: providerConfig.authHeader,

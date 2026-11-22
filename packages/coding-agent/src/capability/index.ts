@@ -362,6 +362,9 @@ function filterProviders<T>(capability: Capability<T>, options: LoadOptions<T>):
 	let providers = disabled
 		? (capability.providers as Provider<T>[]).filter(p => !disabled.has(p.id))
 		: (capability.providers as Provider<T>[]);
+	if (process.env.PI_CONFIG_SOURCES === "native") {
+		providers = providers.filter(p => isAmbientSourceEnabled(p.id) || options.providers?.includes(p.id));
+	}
 
 	if (options.providers) {
 		const allowed = new Set(options.providers);
@@ -423,6 +426,7 @@ export function isUserSourceEnabled(source: string, ctx?: LoadContext): boolean 
 	if (ctx?.explicitProviders?.has(id) || ctx?.includeOptOutUserSources) return true;
 	const enabled = enabledProviders();
 	if (enabled.has(id) || enabled.has("*") || enabled.has("all")) return true;
+	if (process.env.PI_CONFIG_SOURCES === "native") return false;
 	if (id === "claude-plugins" && enabled.has("claude")) return true;
 	if (id === "claude" && process.env.CLAUDE_CONFIG_DIR?.trim()) return true;
 	return false;
@@ -478,7 +482,28 @@ export function enableProvider(providerId: string): void {
  * {@link isUserSourceEnabled}.
  */
 export function isProviderEnabled(providerId: string): boolean {
-	return !disabledProviders().has(providerId);
+	return !disabledProviders().has(providerId) && isAmbientSourceEnabled(providerId);
+}
+
+/** Native-only launch policy; explicit profile source opt-ins still take precedence. */
+function isAmbientSourceEnabled(id: string): boolean {
+	if (process.env.PI_CONFIG_SOURCES !== "native") return true;
+	if (
+		[
+			"native",
+			"builtin-defaults",
+			"omp-managed",
+			"omp-plugins",
+			"agent-plugins",
+			"agents-md",
+			"custom-context",
+			"skillshare",
+			"ssh-config",
+		].includes(id)
+	)
+		return true;
+	const enabled = enabledProviders();
+	return enabled.has(id) || enabled.has("*") || enabled.has("all");
 }
 
 /**

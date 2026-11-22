@@ -1,8 +1,8 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { CONFIG_DIR_NAME, getAgentDir, getProjectDir } from "@oh-my-pi/pi-utils";
-import { isUserSourceEnabled } from "./capability";
+import { CONFIG_DIR_NAME, getAgentDir, getProjectConfigDirName, getProjectDir } from "@oh-my-pi/pi-utils";
+import { isProviderEnabled, isUserSourceEnabled } from "./capability";
 import { resolveClaudePaths } from "./config/claude-paths";
 import { expandTilde } from "./tools/path-utils";
 
@@ -150,7 +150,13 @@ export function getConfigDirs(subpath: string, options: GetConfigDirsOptions = {
 	// Project-level directories
 	if (project) {
 		for (const { base, name } of PROJECT_CONFIG_BASES) {
-			const resolvedPath = path.resolve(cwd, base, subpath);
+			if (
+				process.env.PI_CONFIG_SOURCES === "native" &&
+				name !== CONFIG_DIR_NAME &&
+				!isProviderEnabled(name.replace(/^\./, ""))
+			)
+				continue;
+			const resolvedPath = path.resolve(cwd, name === CONFIG_DIR_NAME ? getProjectConfigDirName() : base, subpath);
 			if (!existingOnly || fs.existsSync(resolvedPath)) {
 				results.push({ path: resolvedPath, source: name, level: "project" });
 			}
@@ -229,8 +235,14 @@ export function findAllNearestProjectConfigDirs(subpath: string, cwd: string = g
 	while (foundBases.size < PROJECT_CONFIG_BASES.length) {
 		for (const { base, name } of PROJECT_CONFIG_BASES) {
 			if (foundBases.has(name)) continue;
+			if (
+				process.env.PI_CONFIG_SOURCES === "native" &&
+				name !== CONFIG_DIR_NAME &&
+				!isProviderEnabled(name.replace(/^\./, ""))
+			)
+				continue;
 
-			const candidate = path.join(currentDir, base, subpath);
+			const candidate = path.join(currentDir, name === CONFIG_DIR_NAME ? getProjectConfigDirName() : base, subpath);
 			try {
 				if (fs.statSync(candidate).isDirectory()) {
 					results.push({ path: candidate, source: name, level: "project" });

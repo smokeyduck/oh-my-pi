@@ -7,9 +7,11 @@ import {
 	__resetProjectDirCacheForTests,
 	directoryExists,
 	directoryIsMissing,
+	getConfigRootDir,
 	getLogPath,
 	getProjectDir,
 	getTestTempDir,
+	getWebKitHostPath,
 	localDay,
 	relativePathWithinRoot,
 	setProjectDir,
@@ -115,6 +117,25 @@ describe("dated log path", () => {
 		if (proc.exitCode === 2) return; // TZ not honored on this platform
 		if (proc.exitCode !== 0) console.error(proc.stderr.toString());
 		expect(proc.exitCode).toBe(0);
+	});
+});
+
+describe("WebKit engine storage", () => {
+	it("keeps native-only launches inside their config root without changing default CLI storage", () => {
+		const before = process.env.PI_CONFIG_SOURCES;
+		try {
+			process.env.PI_CONFIG_SOURCES = "native";
+			expect(getWebKitHostPath()).toBe(
+				path.join(getConfigRootDir(), "cache", "abkit", process.platform === "win32" ? "ABHost.exe" : "ABHost"),
+			);
+			delete process.env.PI_CONFIG_SOURCES;
+			expect(getWebKitHostPath()).toBe(
+				path.join(os.homedir(), ".o2", "lib", "abkit", process.platform === "win32" ? "ABHost.exe" : "ABHost"),
+			);
+		} finally {
+			if (before === undefined) delete process.env.PI_CONFIG_SOURCES;
+			else process.env.PI_CONFIG_SOURCES = before;
+		}
 	});
 });
 

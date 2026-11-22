@@ -4,8 +4,11 @@
 
 ### Fixed
 
+- Isolated hosts can select a project configuration namespace with `PI_PROJECT_CONFIG_DIR` and disable ambient legacy configuration with `PI_CONFIG_SOURCES=native`, without changing normal CLI defaults or explicit profile opt-ins.
 - RPC hosts can remove a global settings override again, restoring the value from the remaining configuration layers.
 - Custom compiled distributions can include their HTML session viewer so exports open without an upstream-hosted viewer release.
+- Wisa discovery without a provider API uses Anthropic Messages for Claude, Responses for OpenAI models, and Chat Completions for other families. Explicit APIs and per-model overrides remain authoritative; other gateways are unchanged.
+- Wisa request API changes retain the existing discovery cache namespace; cached rosters are normalized to the selected API policy without losing models when discovery is unavailable.
 ## [19.1.0] - 2026-11-21
 
 ### Breaking Changes

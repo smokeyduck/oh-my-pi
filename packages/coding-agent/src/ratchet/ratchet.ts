@@ -14,9 +14,9 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { calculateUsageCost } from "@oh-my-pi/pi-catalog/models";
 import type { ModelCost, Usage } from "@oh-my-pi/pi-catalog/types";
-import { isEnoent, isRecord } from "@oh-my-pi/pi-utils";
+import { getProjectConfigDirName, isEnoent, isRecord } from "@oh-my-pi/pi-utils";
 
-export const RATCHET_ROOT = path.join(".omp", "ratchet");
+export const RATCHET_ROOT = path.join(getProjectConfigDirName(), "ratchet");
 export const RATCHET_STAGES = ["inputs", "grader", "plan"] as const;
 export type RatchetStage = (typeof RATCHET_STAGES)[number];
 export type Direction = "higher" | "lower";

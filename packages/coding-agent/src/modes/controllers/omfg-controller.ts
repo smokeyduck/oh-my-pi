@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import { CONFIG_DIR_NAME, prompt } from "@oh-my-pi/pi-utils";
+import { getProjectAgentDir, prompt } from "@oh-my-pi/pi-utils";
 import { invalidate as invalidateCapabilityCache } from "../../capability";
 import type { Rule } from "../../capability/rule";
 import omfgUserPrompt from "../../prompts/system/omfg-user.md" with { type: "text" };
@@ -297,7 +297,7 @@ export class OmfgController {
 			};
 		}
 		return {
-			filePath: path.join(this.ctx.sessionManager.getCwd(), CONFIG_DIR_NAME, "rules", `${ruleName}.md`),
+			filePath: path.join(getProjectAgentDir(this.ctx.sessionManager.getCwd()), "rules", `${ruleName}.md`),
 			level: "project",
 		};
 	}

@@ -9,6 +9,8 @@
 - Custom compiled distributions can include their HTML session viewer so exports open without an upstream-hosted viewer release.
 - Wisa discovery without a provider API uses Anthropic Messages for Claude, Responses for OpenAI models, and Chat Completions for other families. Explicit APIs and per-model overrides remain authoritative; other gateways are unchanged.
 - Wisa request API changes retain the existing discovery cache namespace; cached rosters are normalized to the selected API policy without losing models when discovery is unavailable.
+- Startup no-model warnings now clear after a model is successfully selected, including in RPC hosts, without dismissing unrelated configuration warnings.
+
 ### Added
 
 - Added `pi.registerTodoBackend()` and the `todo.backend` setting: an extension can mirror the main session's todo list into an external store, which gets the whole list after every change ([#19890](https://github.com/can1357/oh-my-pi/pull/19890) by [@Dangerboi](https://github.com/Dangerboi))

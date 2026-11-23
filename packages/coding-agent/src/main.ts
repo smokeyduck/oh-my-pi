@@ -2742,6 +2742,7 @@ export async function runRootCommand(
 				session,
 				setToolUIContext,
 				modelFallbackMessage,
+				modelFallbackMessageIsTransient,
 				lspServers,
 				mcpManager,
 				startBackgroundModelDiscovery,
@@ -2849,7 +2850,7 @@ export async function runRootCommand(
 			});
 			watchScopedModelSettings(session, parsedArgs, modelRegistry, settingsInstance);
 
-			if (modelFallbackMessage) {
+			if (modelFallbackMessage && !modelFallbackMessageIsTransient) {
 				notifs.push({ kind: "warn", message: modelFallbackMessage });
 				// Non-interactive runs have no notification surface: a model that still
 				// started in place of the requested one is reported on stderr, keeping

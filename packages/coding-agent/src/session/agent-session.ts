@@ -1176,6 +1176,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	#scopedModelsRefresher: (() => Promise<void>) | undefined;
 
 	readonly configWarnings: string[] = [];
+	#startupModelWarning: string | undefined;
 	/** Construction skipped fallback-chain validation; {@link validateRetryFallbackChains} still owes it. */
 	#fallbackChainValidationDeferred = false;
 
@@ -2508,7 +2509,10 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			sessionId: () => this.sessionId,
 			promptGeneration: () => this.#promptGeneration,
 			resolveActiveEditMode: () => this.#tools.resolveActiveEditMode(),
-			syncAfterModelChange: previousEditMode => this.#tools.syncAfterModelChange(previousEditMode),
+			syncAfterModelChange: async previousEditMode => {
+				await this.#tools.syncAfterModelChange(previousEditMode);
+				this.#clearStartupModelWarning();
+			},
 			setModelWithProviderSessionReset: async (model, selection = "explicit") => {
 				// An explicit selection, including same-model reselection, takes ownership when it publishes. The reset
 				// publishes before its first await, so releasing first lets an in-flight prewalk switch see the newer
@@ -2580,8 +2584,10 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			sessionMessageAlreadyPersisted: message => this.#sessionMessageAlreadyPersisted(message),
 			setModelWithProviderSessionReset: model => this.#setModelWithProviderSessionReset(model),
 			resolveActiveEditMode: () => this.#tools.resolveActiveEditMode(),
-			syncAfterModelChange: (previousEditMode, options) =>
-				this.#tools.syncAfterModelChange(previousEditMode, options),
+			syncAfterModelChange: async (previousEditMode, options) => {
+				await this.#tools.syncAfterModelChange(previousEditMode, options);
+				this.#clearStartupModelWarning();
+			},
 			resetCurrentResponsesProviderSession: reason => this.#resetCurrentResponsesProviderSession(reason),
 			maybeAutoRedeemReset: activeBlockUnblockAtMs => this.#maybeAutoRedeemReset(activeBlockUnblockAtMs),
 			runAutoCompaction: (reason, willRetry, options) =>
@@ -7790,6 +7796,26 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	/** Full agent state */
 	get state(): AgentState {
 		return this.agent.state;
+	}
+
+	/** Current diagnostics, including the startup warning until a model selection succeeds. */
+	getConfigWarnings(): string[] {
+		return this.#startupModelWarning === undefined
+			? [...this.configWarnings]
+			: [...this.configWarnings, this.#startupModelWarning];
+	}
+
+	/** Register the no-model startup notice without taking ownership of unrelated diagnostics. */
+	setStartupModelWarning(message: string): void {
+		if (this.model || this.#startupModelWarning === message) return;
+		this.#startupModelWarning = message;
+		this.#emit({ type: "config_warnings_changed" });
+	}
+
+	#clearStartupModelWarning(): void {
+		if (!this.model || this.#startupModelWarning === undefined) return;
+		this.#startupModelWarning = undefined;
+		this.#emit({ type: "config_warnings_changed" });
 	}
 
 	/** Current model (may be undefined if not yet selected) */
@@ -15554,6 +15580,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 				if (options?.onModelFallback) options.onModelFallback(modelFallbackWarning);
 				else this.emitNotice("warning", modelFallbackWarning);
 			}
+			this.#clearStartupModelWarning();
 			return true;
 		} catch (error) {
 			this.sessionManager.restoreState(previousSessionState);
@@ -17468,6 +17495,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		this.agent.setModel(refreshed);
 		await this.#reconcileModelDependentState(refreshed);
 		if (this.#isDisposed) return;
+		this.#clearStartupModelWarning();
 		this.#emit({ type: "model_changed" });
 	}
 

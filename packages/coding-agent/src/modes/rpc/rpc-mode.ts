@@ -4081,7 +4081,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 			}
 
 			case "get_config_warnings": {
-				return success(id, "get_config_warnings", { warnings: [...session.configWarnings] });
+				return success(id, "get_config_warnings", { warnings: session.getConfigWarnings() });
 			}
 
 			case "get_advisor_status": {

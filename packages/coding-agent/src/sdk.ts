@@ -1119,6 +1119,8 @@ export interface CreateAgentSessionResult {
 	mcpManager?: MCPManager;
 	/** Warning if session was restored with a different model than saved */
 	modelFallbackMessage?: string;
+	/** The no-model startup diagnostic is owned by the session and expires after a successful selection. */
+	modelFallbackMessageIsTransient?: boolean;
 	/** LSP servers detected for startup; warmup may continue in the background */
 	lspServers?: LspStartupServerInfo[];
 	/** Start cache-aware online runtime model discovery after the first UI paint. */
@@ -6500,6 +6502,8 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			});
 		}
 		startDeferredMCPDiscovery?.(session);
+		const modelFallbackMessageIsTransient = !model && modelFallbackMessage !== undefined;
+		if (!model && modelFallbackMessage !== undefined) session.setStartupModelWarning(modelFallbackMessage);
 
 		startupCleanup.move();
 		return {
@@ -6508,6 +6512,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			setToolUIContext,
 			mcpManager: ownedMcpManager ?? (mcpManager instanceof MCPManager ? mcpManager : undefined),
 			modelFallbackMessage,
+			modelFallbackMessageIsTransient,
 			lspServers,
 			startBackgroundModelDiscovery: startRuntimeDiscovery,
 			eventBus,

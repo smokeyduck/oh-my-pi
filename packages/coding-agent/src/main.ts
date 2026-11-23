@@ -159,6 +159,7 @@ import { cfgGoalEnabled } from "./goals/settings";
 import { cfgPlanDefaultOnStartup, cfgPlanEnabled } from "./plan-mode/settings";
 
 import { cfgAdvisorEnabled } from "./advisor/settings";
+import { BUILTIN_TOOL_NAMES } from "./tools/builtin-names";
 import { syncRelayInstallsOnStartup } from "./tools/browser/relay/installs";
 import { claimTerminal } from "./tools/browser/terminal-owner";
 import { cfgAsyncPrintWake, cfgLaunchPersist, cfgToolsApprovalMode } from "./tools/settings";
@@ -202,6 +203,7 @@ import {
 	cfgSessionWarnCost,
 	cfgSessionWorktreeScope,
 } from "./session/settings";
+import { desktopThinkingEnabled, desktopThinkingSetting } from "./session/desktop-thinking";
 import { cfgDisabledProviders, cfgEnabledModels, cfgModelProviderOrder } from "./config/model-settings";
 import { cfgTaskAgentIdleTtlMs } from "./task/settings";
 import { cfgSkillsIncludeSkills } from "./extensibility/settings";
@@ -1158,6 +1160,13 @@ export function toSessionScopedModels(
 	activeSettings: Settings,
 ): Array<{ model: Model; thinkingLevel?: ThinkingLevel }> {
 	if (scopedModels.length === 0) return [];
+	if (desktopThinkingEnabled()) {
+		const defaultThinkingLevel = concreteThinkingLevel(desktopThinkingSetting(activeSettings));
+		return scopedModels.map(({ model, explicitThinkingLevel, thinkingLevel }) => ({
+			model,
+			thinkingLevel: explicitThinkingLevel ? thinkingLevel : defaultThinkingLevel,
+		}));
+	}
 	const defaultThinkingLevel = concreteThinkingLevel(
 		parseConfiguredThinkingLevel(cfgDefaultThinkingLevel.get(activeSettings)),
 	);
@@ -1827,6 +1836,20 @@ export async function buildSessionOptions(
 		options.toolNames = parsed.tools && parsed.tools.length > 0 ? parsed.tools : [];
 	} else if (parsed.tools) {
 		options.toolNames = parsed.tools;
+	}
+	// Desktop profiles describe availability, not explicit CLI requests: tools
+	// disabled by a Core setting or unavailable here must not block startup.
+	// Work keeps its agent session kind, but restricts registration to the list.
+	if (parsed.mode === "rpc-ui" && sessionKind !== "chat") {
+		const profile = process.env.WISA_GUI_TOOL_PROFILE;
+		if (profile?.startsWith("work:")) {
+			const names = profile.slice("work:".length).split(",");
+			options.toolNames = BUILTIN_TOOL_NAMES.filter(name => names.includes(name));
+			options.restrictToolNames = true;
+		} else if (profile?.startsWith("coding:")) {
+			const names = profile.slice("coding:".length).split(",");
+			options.disabledBuiltinTools = new Set(BUILTIN_TOOL_NAMES.filter(name => names.includes(name)));
+		}
 	}
 
 	if (parsed.noLsp) {
@@ -2752,7 +2775,13 @@ export async function runRootCommand(
 
 			const sessionToolNames = session.getAllToolNames();
 			try {
-				validateToolNames(initialArgs.tools, sessionToolNames);
+				// A workspace may request a tool the active Coding profile turned off.
+				// The profile wins, but other invalid or unavailable CLI requests still fail.
+				const disabled = sessionOptions.disabledBuiltinTools;
+				validateToolNames(
+					disabled ? initialArgs.tools?.filter(name => !disabled.has(name)) : initialArgs.tools,
+					sessionToolNames,
+				);
 			} catch (error) {
 				await session.dispose();
 				// With no working eval backend, `--tools eval` is rejected here, before the startup

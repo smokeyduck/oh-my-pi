@@ -3,17 +3,20 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import { cfgAutolearnEnabled } from "@oh-my-pi/pi-coding-agent/autolearn/settings";
 import { parseArgs } from "@oh-my-pi/pi-coding-agent/cli/args";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { cfgEditMode } from "@oh-my-pi/pi-coding-agent/edit/settings";
 import { cfgAutoResume } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import { buildSessionOptions, createSessionManager } from "@oh-my-pi/pi-coding-agent/main";
+import { cfgMemoryBackend } from "@oh-my-pi/pi-coding-agent/memory-backend/settings";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { CURRENT_SESSION_VERSION, type SessionHeader } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 import { loadEntriesFromFile } from "@oh-my-pi/pi-coding-agent/session/session-loader";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { createTools, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import { createTools, resolveBuiltinToolPlan, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
 const tempDirs: TempDir[] = [];
@@ -182,6 +185,67 @@ describe("--chat flag → session options", () => {
 
 		expect(options.toolNames).toEqual(["read"]);
 	});
+});
+
+it("applies desktop tool profiles to the actual built-in plan without converting Work to Chat", async () => {
+	const cwd = makeTempDir("@omp-desktop-tool-profile-");
+	const authStorage = await AuthStorage.create(path.join(cwd, "auth.db"));
+	const settings = await Settings.loadIsolated({ cwd, agentDir: cwd, inMemory: true });
+	cfgAutolearnEnabled.override(settings, false);
+	cfgEditMode.override(settings, "hashline");
+	const registry = new ModelRegistry(authStorage);
+	const manager = SessionManager.create(cwd, path.join(cwd, "sessions"));
+	const gui = parseArgs(["--mode", "rpc-ui"]);
+	const oldProfile = process.env.WISA_GUI_TOOL_PROFILE;
+	const toolSession: ToolSession = {
+		cwd,
+		settings,
+		hasUI: true,
+		getSessionFile: () => null,
+		getSessionSpawns: () => "*",
+		skipPythonPreflight: true,
+	};
+	try {
+		process.env.WISA_GUI_TOOL_PROFILE = "work:read,edit,learn,manage_skill";
+		const work = await buildSessionOptions(gui, [], manager, registry, settings);
+		expect(work.restrictToolNames).toBe(true);
+		expect(manager.getHeader()?.kind).not.toBe("chat");
+		const workPlan = await resolveBuiltinToolPlan(
+			{ ...toolSession, restrictToolNames: work.restrictToolNames },
+			work.toolNames,
+		);
+		expect(workPlan.names).toEqual(["read", "edit"]);
+		cfgAutolearnEnabled.override(settings, true);
+		cfgMemoryBackend.override(settings, "local");
+		const learningPlan = await resolveBuiltinToolPlan(
+			{ ...toolSession, restrictToolNames: work.restrictToolNames },
+			work.toolNames,
+		);
+		expect(learningPlan.names).toEqual(["read", "edit", "learn", "manage_skill"]);
+
+		process.env.WISA_GUI_TOOL_PROFILE = "work:";
+		const blank = await buildSessionOptions(gui, [], manager, registry, settings);
+		expect(blank.toolNames).toEqual([]);
+		expect(blank.restrictToolNames).toBe(true);
+
+		process.env.WISA_GUI_TOOL_PROFILE = "coding:bash,ast_grep,edit";
+		const coding = await buildSessionOptions(gui, [], manager, registry, settings);
+		expect(coding.restrictToolNames).toBeUndefined();
+		const codingPlan = await resolveBuiltinToolPlan({
+			...toolSession,
+			disabledBuiltinTools: coding.disabledBuiltinTools,
+		});
+		expect(codingPlan.names).toContain("read");
+		expect(codingPlan.names).not.toContain("bash");
+		expect(codingPlan.names).not.toContain("ast_grep");
+		expect(codingPlan.names).not.toContain("edit");
+		expect(codingPlan.isAllowed("bash")).toBe(false);
+		const cli = await buildSessionOptions(parseArgs([]), [], manager, registry, settings);
+		expect(cli.disabledBuiltinTools).toBeUndefined();
+	} finally {
+		if (oldProfile === undefined) delete process.env.WISA_GUI_TOOL_PROFILE;
+		else process.env.WISA_GUI_TOOL_PROFILE = oldProfile;
+	}
 });
 
 describe("--chat + autoResume", () => {

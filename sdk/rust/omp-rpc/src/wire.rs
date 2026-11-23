@@ -2608,6 +2608,8 @@ pub struct ThinkingConfig {
 	pub suppress_when_off: Option<bool>,
 	#[serde(rename = "requiresEffort", default, skip_serializing_if = "Option::is_none")]
 	pub requires_effort: Option<bool>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub unverified: Option<bool>,
 }
 
 /// Model descriptor: the client-relevant subset of the server's model record.
@@ -3104,12 +3106,15 @@ pub struct SessionState {
 	pub model: Option<ModelInfo>,
 	#[serde(rename = "thinkingLevel", default, skip_serializing_if = "Option::is_none")]
 	pub thinking_level: Option<ThinkingLevel>,
-	/// The user's thinking selector: `auto` while auto mode picks the effort, else `thinkingLevel`.
+	/// The user's thinking selector, which may not pin a concrete effort.
 	#[serde(rename = "configuredThinkingLevel", default, skip_serializing_if = "Option::is_none")]
 	pub configured_thinking_level: Option<ConfiguredThinkingLevel>,
-	/// Selectors the active model accepts, as omp's thinking selector lists them: `off`, `auto`, then its efforts.
+	/// Selectors the active model accepts.
 	#[serde(rename = "thinkingLevels", default, skip_serializing_if = "Option::is_none")]
 	pub thinking_levels: Option<Vec<ConfiguredThinkingLevel>>,
+	/// `auto` delegates to the provider instead of running the client classifier.
+	#[serde(rename = "thinkingAutoMode", default, skip_serializing_if = "Option::is_none")]
+	pub thinking_auto_mode: Option<LitProvider>,
 	#[serde(rename = "isStreaming", default = "default_session_state_is_streaming")]
 	pub is_streaming: bool,
 	#[serde(rename = "isCompacting", default = "default_session_state_is_compacting")]
@@ -6447,6 +6452,27 @@ impl<'de> Deserialize<'de> for LitCompleted {
 			Ok(Self)
 		} else {
 			Err(D::Error::custom(format!("expected \"completed\", got {value}")))
+		}
+	}
+}
+
+/// The constant `"provider"`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct LitProvider;
+
+impl Serialize for LitProvider {
+	fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+		serializer.serialize_str("provider")
+	}
+}
+
+impl<'de> Deserialize<'de> for LitProvider {
+	fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+		let value = Value::deserialize(deserializer)?;
+		if value.as_str() == Some("provider") {
+			Ok(Self)
+		} else {
+			Err(D::Error::custom(format!("expected \"provider\", got {value}")))
 		}
 	}
 }

@@ -356,6 +356,7 @@ export type RpcCommand =
 	| { id?: string; type: "get_settings_schema" }
 	| { id?: string; type: "get_settings"; paths?: string[] }
 	| { id?: string; type: "set_setting"; path: string; value: unknown }
+	| { id?: string; type: "reset_settings" }
 
 	// Providers
 	| { id?: string; type: "get_providers"; forceRefresh?: boolean }
@@ -734,14 +735,16 @@ export interface RpcSessionState {
 	collab?: RpcCollabState;
 	model?: Model;
 	thinkingLevel: ThinkingLevel | undefined;
-	/** Configured selector: `auto` while auto mode is active, else the effective level. Drives pickers (Codex-style) rather than cyclers. */
+	/** Configured selector, which may not pin a concrete effort. */
 	thinkingConfigured?: ConfiguredThinkingLevel;
 	/** Levels the active model actually supports (empty = model does not reason); pickers must not offer unsupported values. */
 	availableThinkingLevels?: ThinkingLevel[];
-	/** The user's thinking selector: `auto` while auto mode picks the effort (same value as `thinkingConfigured`). */
+	/** The user's selector (same value as `thinkingConfigured`). */
 	configuredThinkingLevel?: ConfiguredThinkingLevel;
-	/** Selectors the active model accepts: `off`, `auto`, then its efforts (same ladder as `availableThinkingLevels`). */
+	/** Selectors the active model accepts. */
 	thinkingLevels?: ConfiguredThinkingLevel[];
+	/** When present, `auto` delegates to the provider instead of running the client classifier. */
+	thinkingAutoMode?: "provider";
 	isStreaming: boolean;
 	isCompacting: boolean;
 	/** Manual compaction that prepares without blocking the current turn. */
@@ -3116,6 +3119,7 @@ export type RpcResponse =
 				advisorActive?: boolean;
 			};
 	  }
+	| { id?: string; type: "response"; command: "reset_settings"; success: true }
 
 	// Providers
 	| {

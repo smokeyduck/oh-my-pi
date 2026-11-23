@@ -1807,6 +1807,7 @@ type ThinkingConfig struct {
 	EffortBudgets   map[string]float64 `json:"effortBudgets,omitempty"`
 	SuppressWhenOff *bool              `json:"suppressWhenOff,omitempty"`
 	RequiresEffort  *bool              `json:"requiresEffort,omitempty"`
+	Unverified      *bool              `json:"unverified,omitempty"`
 }
 
 func (v *ThinkingConfig) UnmarshalJSON(data []byte) error {
@@ -1826,6 +1827,7 @@ func (v *ThinkingConfig) decodeFrom(raw map[string]json.RawMessage) error {
 	d.optional("effortBudgets", &out.EffortBudgets)
 	d.optional("suppressWhenOff", &out.SuppressWhenOff)
 	d.optional("requiresEffort", &out.RequiresEffort)
+	d.optional("unverified", &out.Unverified)
 	if d.err != nil {
 		return d.err
 	}
@@ -2536,22 +2538,24 @@ type SessionState struct {
 	SessionID     string         `json:"sessionId"`
 	Model         *ModelInfo     `json:"model,omitempty"`
 	ThinkingLevel *ThinkingLevel `json:"thinkingLevel,omitempty"`
-	// The user's thinking selector: `auto` while auto mode picks the effort, else `thinkingLevel`.
+	// The user's thinking selector, which may not pin a concrete effort.
 	ConfiguredThinkingLevel *ConfiguredThinkingLevel `json:"configuredThinkingLevel,omitempty"`
-	// Selectors the active model accepts, as omp's thinking selector lists them: `off`, `auto`, then its efforts.
-	ThinkingLevels         []ConfiguredThinkingLevel `json:"thinkingLevels,omitempty"`
-	IsStreaming            bool                      `json:"isStreaming"`
-	IsCompacting           bool                      `json:"isCompacting"`
-	IsBackgroundCompacting bool                      `json:"isBackgroundCompacting"`
-	SteeringMode           QueueMode                 `json:"steeringMode"`
-	FollowUpMode           QueueMode                 `json:"followUpMode"`
-	InterruptMode          InterruptMode             `json:"interruptMode"`
-	SessionFile            *string                   `json:"sessionFile,omitempty"`
-	SessionName            *string                   `json:"sessionName,omitempty"`
-	AutoCompactionEnabled  bool                      `json:"autoCompactionEnabled"`
-	FastModeEnabled        bool                      `json:"fastModeEnabled"`
-	FastModeActive         bool                      `json:"fastModeActive"`
-	FastModeUltrafast      bool                      `json:"fastModeUltrafast"`
+	// Selectors the active model accepts.
+	ThinkingLevels []ConfiguredThinkingLevel `json:"thinkingLevels,omitempty"`
+	// `auto` delegates to the provider instead of running the client classifier.
+	ThinkingAutoMode       *SessionStateThinkingAutoMode `json:"thinkingAutoMode,omitempty"`
+	IsStreaming            bool                          `json:"isStreaming"`
+	IsCompacting           bool                          `json:"isCompacting"`
+	IsBackgroundCompacting bool                          `json:"isBackgroundCompacting"`
+	SteeringMode           QueueMode                     `json:"steeringMode"`
+	FollowUpMode           QueueMode                     `json:"followUpMode"`
+	InterruptMode          InterruptMode                 `json:"interruptMode"`
+	SessionFile            *string                       `json:"sessionFile,omitempty"`
+	SessionName            *string                       `json:"sessionName,omitempty"`
+	AutoCompactionEnabled  bool                          `json:"autoCompactionEnabled"`
+	FastModeEnabled        bool                          `json:"fastModeEnabled"`
+	FastModeActive         bool                          `json:"fastModeActive"`
+	FastModeUltrafast      bool                          `json:"fastModeUltrafast"`
 	// `/slow` applies to the active model.
 	SlowModeSupported bool `json:"slowModeSupported"`
 	// `/slow` is on for the active model; always `false` when `slowModeSupported` is `false`.
@@ -2589,6 +2593,7 @@ func (v *SessionState) decodeFrom(raw map[string]json.RawMessage) error {
 	d.optional("thinkingLevel", &out.ThinkingLevel)
 	d.optional("configuredThinkingLevel", &out.ConfiguredThinkingLevel)
 	d.optional("thinkingLevels", &out.ThinkingLevels)
+	d.optional("thinkingAutoMode", &out.ThinkingAutoMode)
 	d.defaulted("isStreaming", &out.IsStreaming, `false`)
 	d.defaulted("isCompacting", &out.IsCompacting, `false`)
 	d.defaulted("isBackgroundCompacting", &out.IsBackgroundCompacting, `false`)
@@ -2622,6 +2627,25 @@ func (v *SessionState) decodeFrom(raw map[string]json.RawMessage) error {
 	}
 	*v = out
 	return nil
+}
+
+type SessionStateThinkingAutoMode string
+
+const (
+	SessionStateThinkingAutoModeProvider SessionStateThinkingAutoMode = "provider"
+)
+
+func (v *SessionStateThinkingAutoMode) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "SessionStateThinkingAutoMode")
+	if err != nil {
+		return err
+	}
+	switch value := SessionStateThinkingAutoMode(s); value {
+	case SessionStateThinkingAutoModeProvider:
+		*v = value
+		return nil
+	}
+	return unknownValue("SessionStateThinkingAutoMode", s)
 }
 
 type BashResult struct {

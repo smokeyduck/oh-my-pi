@@ -337,6 +337,63 @@ describe("AgentSession role model thinking behavior", () => {
 		expect(session.agent.state.thinkingLevel).toBe(Effort.Medium);
 	});
 
+	it("keeps desktop provider Auto separate from classification through model and suffix changes", async () => {
+		const previous = process.env.PI_GUI_NATIVE_THINKING;
+		process.env.PI_GUI_NATIVE_THINKING = "1";
+		try {
+			const fixed = getAnthropicModelOrThrow("claude-sonnet-4-5");
+			const adaptive = getAnthropicModelOrThrow("claude-sonnet-4-6");
+			const unknown = buildModel({
+				id: "unknown-reasoning-capability",
+				name: "Discovered model",
+				api: "openai-completions",
+				provider: "custom-thinking",
+				baseUrl: "https://custom.example/v1",
+				input: ["text"],
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				contextWindow: 128_000,
+				maxTokens: 8192,
+			});
+			await createSession({
+				initialModelId: adaptive.id,
+				initialThinkingLevel: Effort.High,
+				modelRoles: {},
+				runtimeApiKeys: { [unknown.provider]: "test-key" },
+			});
+			const classifier = vi.spyOn(autoThinkingClassifier, "classifyDifficulty").mockResolvedValue(Effort.Medium);
+			vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined);
+			expect(session.configuredThinkingLevel()).toBe(AUTO_THINKING);
+			expect(session.getAvailableEffortSelectors()).toContain(AUTO_THINKING);
+			expect(session.isAutoThinking).toBe(false);
+			await session.prompt("Implement a focused parser fix");
+			expect(classifier).not.toHaveBeenCalled();
+			expect(session.agent.state.thinkingLevel).toBeUndefined();
+
+			session.setThinkingLevel(Effort.High);
+			await session.setModel(fixed);
+			expect(session.configuredThinkingLevel()).toBe(Effort.High);
+			expect(session.agent.state.thinkingLevel).toBe(Effort.High);
+			expect(session.getAvailableEffortSelectors()).not.toContain(AUTO_THINKING);
+
+			expect(unknown.thinking?.unverified).toBe(true);
+			await session.setModelTemporary(unknown, Effort.High);
+			expect(session.agent.state.thinkingLevel).toBeUndefined();
+			expect(session.getAvailableEffortSelectors()).toEqual([]);
+			session.setThinkingLevel(AUTO_THINKING);
+			expect(session.configuredThinkingLevel()).toBeUndefined();
+			expect(session.agent.state.disableReasoning).toBe(false);
+
+			await session.setModelTemporary(fixed, AUTO_THINKING);
+			expect(session.configuredThinkingLevel()).toBe("inherit");
+			expect(session.agent.state.thinkingLevel).toBeUndefined();
+			await session.setModel(adaptive);
+			expect(session.configuredThinkingLevel()).toBe(AUTO_THINKING);
+		} finally {
+			if (previous === undefined) delete process.env.PI_GUI_NATIVE_THINKING;
+			else process.env.PI_GUI_NATIVE_THINKING = previous;
+		}
+	});
+
 	it("cycles through off and auto before returning to effort levels", async () => {
 		const model = getAnthropicModelOrThrow("claude-sonnet-4-5");
 

@@ -106,12 +106,13 @@ export const stateDefs = {
 		"thinkingLevel?": "ThinkingLevel",
 		"configuredThinkingLevel?": doc(
 			"ConfiguredThinkingLevel",
-			"The user's thinking selector: `auto` while auto mode picks the effort, else `thinkingLevel`.",
+			"The user's thinking selector, which may not pin a concrete effort.",
 		),
 		"thinkingLevels?": doc(
 			"ConfiguredThinkingLevel[]",
-			"Selectors the active model accepts, as omp's thinking selector lists them: `off`, `auto`, then its efforts.",
+			"Selectors the active model accepts.",
 		),
+		"thinkingAutoMode?": doc("'provider'", "`auto` delegates to the provider instead of running the client classifier."),
 		isStreaming: absentAs("boolean", false),
 		isCompacting: absentAs("boolean", false),
 		isBackgroundCompacting: absentAs("boolean", false),

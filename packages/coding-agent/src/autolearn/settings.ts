@@ -6,12 +6,12 @@ import { register } from "../config/registry";
 
 // Auto-Learn (experimental): post-stop nudge to capture lessons to memory
 // and mint/enhance isolated managed skills under ~/.omp/agent/managed-skills.
-// Master flag is default-off → inert (read live at every stop); sub-flags gate behaviour.
+// WISA STUDIO enables guidance; an additional private turn still requires opt-in.
 export const cfgAutolearnEnabled = register({
 	id: "autolearn.enabled",
 	restartRequired: true,
 	type: "boolean",
-	default: false,
+	default: process.env.WISA_STUDIO_DEFAULTS === "1",
 	ui: {
 		tab: "memory",
 		group: "Auto-Learn",

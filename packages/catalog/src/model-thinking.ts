@@ -37,6 +37,31 @@ export function getSupportedEfforts<TApi extends Api>(model: ApiModel<TApi>): re
 	return model.thinking?.efforts ?? [];
 }
 
+/** A dial supplied by the catalog, not a provisional hypothesis for a discovered ID. */
+export function hasVerifiedThinkingControl(model: ApiModel | undefined): boolean {
+	return model?.reasoning === true && model.thinking?.unverified !== true && !!model.thinking?.efforts.length;
+}
+
+/** These request paths can send the adaptive tag without a budget or effort override. */
+export function supportsProviderAdaptiveThinking(model: Model | undefined): boolean {
+	if (
+		!model ||
+		!hasVerifiedThinkingControl(model) ||
+		model.thinking?.mode !== "anthropic-adaptive" ||
+		model.thinking.requiresEffort === true ||
+		model.thinking.effortRouting !== undefined ||
+		model.transport === "pi-native"
+	) {
+		return false;
+	}
+	const compat = model.compat;
+	return (
+		model.api === "bedrock-converse-stream" ||
+		(model.api === "anthropic-messages" &&
+			(!compat || !("disableAdaptiveThinking" in compat) || compat.disableAdaptiveThinking !== true))
+	);
+}
+
 /**
  * Neutral view of a model whose thinking ladder is unverified: `reasoning: false`
  * and no ladder. Requests without an effort use this view so

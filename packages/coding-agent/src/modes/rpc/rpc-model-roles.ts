@@ -1,4 +1,9 @@
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
+import {
+	getSupportedEfforts,
+	hasVerifiedThinkingControl,
+	supportsProviderAdaptiveThinking,
+} from "@oh-my-pi/pi-catalog/model-thinking";
 import { type Model, modelKind } from "@oh-my-pi/pi-catalog/types";
 import type { ModelBrowserRegistry } from "@oh-my-pi/pi-tui/overlays/model-browser";
 import {
@@ -9,7 +14,17 @@ import {
 import { type ConfiguredThinkingLevel, roleThinkingLevels } from "@oh-my-pi/pi-tui/thinking";
 import { getKnownRoleIds, getRoleInfo, roleCandidatePool } from "../../config/model-roles";
 import type { Settings } from "../../config/settings";
+import { desktopThinkingEnabled } from "../../session/desktop-thinking";
 import type { RpcModelRoleMetadataResult, RpcModelRoleSelection, RpcModelRolesResult } from "./rpc-types";
+
+function rpcRoleThinkingLevels(model: Model): ConfiguredThinkingLevel[] {
+	if (!desktopThinkingEnabled()) return roleThinkingLevels(model);
+	if (!hasVerifiedThinkingControl(model)) return [];
+	const levels: ConfiguredThinkingLevel[] = [ThinkingLevel.Inherit, ThinkingLevel.Off];
+	if (supportsProviderAdaptiveThinking(model)) levels.push("auto");
+	levels.push(...getSupportedEfforts(model));
+	return levels;
+}
 
 /** Both RPC views use canonical role discovery and configured presentation metadata. */
 export function buildRpcModelRoleMetadata(settings: Settings): RpcModelRoleMetadataResult {
@@ -37,7 +52,7 @@ export function buildRpcModelRoles(settings: Settings, registry: ModelBrowserReg
 					id: candidate.id,
 					name: candidate.name,
 					kind: modelKind(candidate),
-					thinkingLevels: roleThinkingLevels(candidate),
+					thinkingLevels: rpcRoleThinkingLevels(candidate),
 				})),
 			};
 		}),
@@ -78,7 +93,7 @@ export function rpcModelRoleValue(
 		candidate => `${candidate.provider}/${candidate.id}` === modelId,
 	);
 	if (!model) throw new Error(`${modelId} is not a model the ${role} role accepts`);
-	if (!roleThinkingLevels(model).includes(thinkingLevel)) {
+	if (!rpcRoleThinkingLevels(model).includes(thinkingLevel)) {
 		throw new Error(`${modelId} does not support thinking level ${thinkingLevel}`);
 	}
 	return formatModelSelectorValue(modelId, thinkingLevel);

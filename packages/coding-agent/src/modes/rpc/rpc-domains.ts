@@ -327,6 +327,7 @@ export function buildRpcPromptTemplatesResult(session: AgentSession): RpcPromptT
  * availability wording.
  */
 export async function buildRpcMemoryReport(session: AgentSession): Promise<RpcMemoryReport> {
+	await session.settleMemoryBackend();
 	const backend = await resolveMemoryBackend(session.settings);
 	const agentDir = session.settings.getAgentDir();
 	const cwd = session.sessionManager.getCwd();

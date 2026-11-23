@@ -83,8 +83,10 @@ function abortedSignal(): AbortSignal {
 }
 
 type CapturedPayload = {
+	max_tokens?: number;
 	thinking?: {
 		type: string;
+		budget_tokens?: number;
 		block_binding?: { prefix_mismatch_behavior: "drop_block" | "error" };
 	};
 	tool_choice?: { type: string };
@@ -144,6 +146,24 @@ function answered(text: string, turn: CapturedTurn): AssistantMessage {
 const READ_TOOL = { name: "read", description: "Read a file.", parameters: { type: "object", properties: {} } };
 
 describe("Anthropic preserved-thinking request shaping", () => {
+	it("sends provider Auto without a pin or extra budget on verified adaptive models", async () => {
+		const model = adaptiveModel("claude-sonnet-4-6");
+		let payload: CapturedPayload | undefined;
+		await streamSimple(model, CONTEXT, {
+			apiKey: "test-key",
+			signal: abortedSignal(),
+			maxTokens: 64,
+			providerAdaptiveReasoning: true,
+			onPayload: captured => {
+				payload = captured as CapturedPayload;
+			},
+		}).result();
+		expect(payload?.thinking?.type).toBe("adaptive");
+		expect(payload?.thinking?.budget_tokens).toBeUndefined();
+		expect(payload?.output_config?.effort).toBeUndefined();
+		expect(payload?.max_tokens).toBe(64);
+	});
+
 	it.each(["claude-fable-5-1", "claude-opus-5-5"])("opts %s into dropping prefix-mismatched thinking", async id => {
 		const payload = await capturePayload(makeAnthropicModel(id), {
 			thinkingEnabled: true,

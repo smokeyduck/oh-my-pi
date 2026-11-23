@@ -8,13 +8,13 @@ import { register } from "../config/registry";
 // Mnemopi local SQLite, Hindsight remote memory, Sharpshooter project
 // decisions, or off. The legacy
 // `memories.enabled` flag is migration input only; see config/settings.ts.
-// Protocol hosts (RPC/ACP) start with memory off: embedders opt in through their own settings layer.
+// Generic protocol hosts opt in. WISA STUDIO uses the local workbench by default.
 export const cfgMemoryBackend = register({
 	id: "memory.backend",
-	protocolDefault: ["rpc", "acp"],
+	protocolDefault: process.env.WISA_STUDIO_DEFAULTS === "1" ? undefined : ["rpc", "acp"],
 	type: "enum",
 	values: ["off", "local", "hindsight", "mnemopi", "sharpshooter"] as const,
-	default: "off",
+	default: process.env.WISA_STUDIO_DEFAULTS === "1" ? "local" : "off",
 	ui: {
 		tab: "memory",
 		group: "General",

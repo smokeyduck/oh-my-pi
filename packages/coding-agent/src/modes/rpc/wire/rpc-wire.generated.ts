@@ -352,6 +352,7 @@ export interface ThinkingConfig {
 	effortBudgets?: Record<string, number>;
 	suppressWhenOff?: boolean;
 	requiresEffort?: boolean;
+	unverified?: boolean;
 }
 
 /** Model descriptor: the client-relevant subset of the server's model record. */
@@ -493,10 +494,12 @@ export interface SessionState {
 	sessionId: string;
 	model?: ModelInfo;
 	thinkingLevel?: ThinkingLevel;
-	/** The user's thinking selector: `auto` while auto mode picks the effort, else `thinkingLevel`. */
+	/** The user's thinking selector, which may not pin a concrete effort. */
 	configuredThinkingLevel?: ConfiguredThinkingLevel;
-	/** Selectors the active model accepts, as omp's thinking selector lists them: `off`, `auto`, then its efforts. */
+	/** Selectors the active model accepts. */
 	thinkingLevels?: ConfiguredThinkingLevel[];
+	/** `auto` delegates to the provider instead of running the client classifier. */
+	thinkingAutoMode?: "provider";
 	isStreaming?: boolean;
 	isCompacting?: boolean;
 	isBackgroundCompacting?: boolean;

@@ -17,6 +17,7 @@ import {
 	mapEffortToGoogleThinkingLevel,
 	requireSupportedEffort,
 	resolveWireModelId,
+	supportsProviderAdaptiveThinking,
 	withoutUnverifiedThinking,
 } from "@oh-my-pi/pi-catalog/model-thinking";
 import { $env, getProviderInFlightRoot, isEnoent, isPidAlive, logger, untilAborted } from "@oh-my-pi/pi-utils";
@@ -1918,6 +1919,23 @@ function mapOptionsForApi<TApi extends Api>(
 
 	switch (model.api) {
 		case "anthropic-messages": {
+			if (
+				options?.providerAdaptiveReasoning &&
+				options.reasoning === undefined &&
+				!options.disableReasoning &&
+				!options.forceReasoningOff &&
+				supportsProviderAdaptiveThinking(model)
+			) {
+				return castApi<"anthropic-messages">({
+					...base,
+					requestModelId: resolveWireModelId(model, undefined),
+					thinkingEnabled: true,
+					effort: "adaptive",
+					toolChoice: mapAnthropicToolChoice(options.toolChoice),
+					thinkingDisplay: options.hideThinkingSummary ? "omitted" : undefined,
+					serviceTier: options.serviceTier,
+				});
+			}
 			// Explicitly disable thinking when reasoning is not specified, the caller
 			// disabled it, an external scratchpad replaces it, or the model doesn't
 			// support it. These SimpleStreamOptions flags never reach AnthropicOptions
@@ -2042,6 +2060,8 @@ function mapOptionsForApi<TApi extends Api>(
 				// budget path below must not inflate a capped request for thinking
 				// that was turned off.
 				reasoning: options?.disableReasoning || options?.forceReasoningOff ? undefined : options?.reasoning,
+				providerAdaptiveReasoning:
+					options?.providerAdaptiveReasoning && !options.disableReasoning && !options.forceReasoningOff,
 				thinkingBudgets: options?.thinkingBudgets,
 				toolChoice: mapAnthropicToolChoice(options?.toolChoice),
 				thinkingDisplay: options?.hideThinkingSummary ? "omitted" : undefined,

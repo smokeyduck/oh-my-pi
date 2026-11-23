@@ -13,7 +13,7 @@ import {
 } from "@oh-my-pi/pi-ai/providers/anthropic-state";
 import { isFireworksFastModelId } from "@oh-my-pi/pi-catalog/fireworks-model-id";
 import { THINKING_EFFORTS } from "@oh-my-pi/pi-catalog/effort";
-import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
+import { getSupportedEfforts, hasVerifiedThinkingControl } from "@oh-my-pi/pi-catalog/model-thinking";
 import { modelsAreEqual, routedModelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import { logger } from "@oh-my-pi/pi-utils";
 import { classifyDifficulty } from "../auto-thinking/classifier";
@@ -42,6 +42,7 @@ import {
 	shouldDisableReasoning,
 	toReasoningEffort,
 } from "@oh-my-pi/pi-tui/thinking";
+import { desktopDefaultThinkingSelector, desktopThinkingEnabled, resolveDesktopThinkingLevel } from "./desktop-thinking";
 import type { EditModeSetting } from "../edit/settings";
 import type { AgentSessionEvent } from "./agent-session-events";
 import type { ModelCycleResult, ResolvedRoleModel, RoleModelCycle, RoleModelCycleResult } from "./agent-session-types";
@@ -166,6 +167,7 @@ export class ModelControls {
 	#thinkingLevel: ThinkingLevel | undefined;
 	/** Hard per-session effort ceiling (e.g. a task spawn's `task.maxEffort` cap); recovery paths re-clamp to it. */
 	readonly #thinkingLevelCeiling: Effort | undefined;
+	readonly #desktopThinking = desktopThinkingEnabled();
 	#autoThinking = false;
 	#autoResolvedLevel: Effort | undefined;
 	#serviceTierByFamily: ServiceTierByFamily;
@@ -183,6 +185,10 @@ export class ModelControls {
 		this.#scopedModels = options.scopedModels ?? [];
 		this.#serviceTierByFamily = options.serviceTierByFamily ?? {};
 		this.#thinkingLevelCeiling = options.thinkingLevelCeiling;
+		if (this.#desktopThinking) {
+			this.restoreThinkingLevel(options.thinkingLevel);
+			return;
+		}
 		if (options.thinkingLevel === AUTO_THINKING) {
 			// Keep auto pending until the first turn while exposing a valid wire effort.
 			this.#autoThinking = true;
@@ -215,8 +221,9 @@ export class ModelControls {
 		return this.#thinkingLevelCeiling;
 	}
 
-	/** Configured selector, preserving `auto` while classification is active. */
+	/** Configured selector, including provider adaptation without a concrete effort. */
 	configuredThinkingLevel(): ConfiguredThinkingLevel | undefined {
+		if (this.#desktopThinking) return this.#thinkingLevel ?? desktopDefaultThinkingSelector(this.#model);
 		return this.#autoThinking ? AUTO_THINKING : this.#thinkingLevel;
 	}
 
@@ -254,6 +261,11 @@ export class ModelControls {
 
 	/** Restores thinking state from a transcript without persisting a new entry. */
 	restoreThinkingLevel(level: ConfiguredThinkingLevel | undefined): void {
+		if (this.#desktopThinking) {
+			this.#thinkingLevel = resolveDesktopThinkingLevel(this.#model, level, this.#thinkingLevelCeiling);
+			this.#applyThinkingLevelToAgent(this.#thinkingLevel);
+			return;
+		}
 		this.#autoThinking = level === AUTO_THINKING;
 		this.#autoResolvedLevel = undefined;
 		this.#thinkingLevel =
@@ -548,13 +560,26 @@ export class ModelControls {
 		this.#host.agent.setDisableReasoning(shouldDisableReasoning(level));
 	}
 
-	/**
-	 * Set the thinking level. `auto` enables per-turn classification. Entering
-	 * auto writes its provisional level plus `configured: "auto"` immediately,
-	 * giving external readers an authoritative selection receipt before the next
-	 * user turn. Later classifications persist only changed concrete resolutions.
-	 */
+	/** Set the selector and persist changes to its provider-facing state. */
 	setThinkingLevel(level: ConfiguredThinkingLevel | undefined, persist: boolean = false): void {
+		if (this.#desktopThinking) {
+			const previousLevel = this.#thinkingLevel;
+			this.restoreThinkingLevel(level);
+			if (previousLevel === this.#thinkingLevel) return;
+			const configured = this.configuredThinkingLevel();
+			this.#host.clearInheritedProviderPromptCacheKey();
+			this.#host.sessionManager.appendThinkingLevelChange(this.#thinkingLevel, configured);
+			if (
+				persist &&
+				this.#thinkingLevel !== undefined &&
+				this.#thinkingLevel !== ThinkingLevel.Off &&
+				this.#thinkingLevel !== "inherit"
+			) {
+				cfgDefaultThinkingLevel.set(this.#host.settings, this.#thinkingLevel);
+			}
+			this.#host.emit({ type: "thinking_level_changed", thinkingLevel: this.#thinkingLevel, configured });
+			return;
+		}
 		if (level === AUTO_THINKING) {
 			const provisional = clampThinkingLevelToCeiling(
 				this.#model,
@@ -613,6 +638,10 @@ export class ModelControls {
 	 * `fallback` (the new model's own default) applies only when no level is set.
 	 */
 	#reapplyThinkingLevel(fallback?: ThinkingLevel): void {
+		if (this.#desktopThinking) {
+			this.setThinkingLevel(this.#thinkingLevel);
+			return;
+		}
 		this.setThinkingLevel(
 			this.#autoThinking ? AUTO_THINKING : automaticThinkingLevel(this.#model, this.#thinkingLevel ?? fallback),
 		);
@@ -627,6 +656,13 @@ export class ModelControls {
 			ceiling === undefined
 				? efforts
 				: efforts.filter(level => THINKING_EFFORTS.indexOf(level) <= THINKING_EFFORTS.indexOf(ceiling));
+		if (this.#desktopThinking) {
+			if (efforts.length === 0) return [];
+			const modelDefault = desktopDefaultThinkingSelector(this.#model);
+			return ceiling === undefined && modelDefault !== undefined
+				? [ThinkingLevel.Off, modelDefault, ...selectable]
+				: [ThinkingLevel.Off, ...selectable];
+		}
 		return [ThinkingLevel.Off, AUTO_THINKING, ...selectable];
 	}
 
@@ -638,7 +674,7 @@ export class ModelControls {
 		const levels = this.getAvailableEffortSelectors();
 		if (levels.length === 0) return undefined;
 		const configured = this.configuredThinkingLevel();
-		const currentLevel = configured === ThinkingLevel.Inherit ? ThinkingLevel.Off : configured;
+		const currentLevel = !this.#desktopThinking && configured === ThinkingLevel.Inherit ? ThinkingLevel.Off : configured;
 		const currentIndex = currentLevel ? levels.indexOf(currentLevel) : -1;
 		const nextIndex = (currentIndex + 1) % levels.length;
 		const nextLevel = levels[nextIndex];
@@ -731,7 +767,7 @@ export class ModelControls {
 		if (!this.#host.magicKeywordEnabled("chillax") || !containsMagicKeyword(promptText, "chillax")) return false;
 		const model = this.#model;
 		if (!model?.reasoning || !takesPerMessageEffort(model)) return false;
-		const floor = getSupportedEfforts(model)[0];
+		const floor = this.getAvailableThinkingLevels()[0];
 		if (floor === undefined) return false;
 		if (this.#autoThinking) {
 			this.#resolveAutoThinkingLevel(floor);
@@ -939,6 +975,7 @@ export class ModelControls {
 	 */
 	getAvailableThinkingLevels(): ReadonlyArray<Effort> {
 		if (!this.#model) return [];
+		if (this.#desktopThinking && !hasVerifiedThinkingControl(this.#model)) return [];
 		return getSupportedEfforts(this.#model);
 	}
 }

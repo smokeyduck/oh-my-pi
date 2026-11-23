@@ -2236,6 +2236,9 @@
 				},
 				"requiresEffort": {
 					"type": "boolean"
+				},
+				"unverified": {
+					"type": "boolean"
 				}
 			},
 			"required": [
@@ -2728,14 +2731,18 @@
 				},
 				"configuredThinkingLevel": {
 					"$ref": "#/$defs/ConfiguredThinkingLevel",
-					"description": "The user's thinking selector: `auto` while auto mode picks the effort, else `thinkingLevel`."
+					"description": "The user's thinking selector, which may not pin a concrete effort."
 				},
 				"thinkingLevels": {
 					"type": "array",
 					"items": {
 						"$ref": "#/$defs/ConfiguredThinkingLevel"
 					},
-					"description": "Selectors the active model accepts, as omp's thinking selector lists them: `off`, `auto`, then its efforts."
+					"description": "Selectors the active model accepts."
+				},
+				"thinkingAutoMode": {
+					"const": "provider",
+					"description": "`auto` delegates to the provider instead of running the client classifier."
 				},
 				"isStreaming": {
 					"type": "boolean",

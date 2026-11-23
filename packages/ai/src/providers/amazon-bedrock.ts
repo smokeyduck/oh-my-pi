@@ -13,7 +13,11 @@
  */
 
 import type { Effort } from "@oh-my-pi/pi-catalog/effort";
-import { mapEffortToAnthropicAdaptiveEffort, requireSupportedEffort } from "@oh-my-pi/pi-catalog/model-thinking";
+import {
+	mapEffortToAnthropicAdaptiveEffort,
+	requireSupportedEffort,
+	supportsProviderAdaptiveThinking,
+} from "@oh-my-pi/pi-catalog/model-thinking";
 import { calculateCost } from "@oh-my-pi/pi-catalog/models";
 import { $flag, fetchWithRetry, logger, parseStreamingJsonThrottled, USER_AGENT } from "@oh-my-pi/pi-utils";
 import { renderDemotedThinking } from "../dialect/demotion";
@@ -135,6 +139,7 @@ export interface BedrockOptions extends StreamOptions {
 	toolChoice?: "auto" | "any" | "none" | { type: "tool"; name: string };
 	/* See https://docs.aws.amazon.com/bedrock/latest/userguide/inference-reasoning.html for supported models. */
 	reasoning?: Effort;
+	providerAdaptiveReasoning?: boolean;
 	/* Custom token budgets per thinking level. Overrides default budgets. */
 	thinkingBudgets?: ThinkingBudgets;
 	/* Only supported by Claude 4.x models, see https://docs.aws.amazon.com/bedrock/latest/userguide/claude-messages-extended-thinking.html#claude-messages-extended-thinking-tool-use-interleaved */
@@ -791,7 +796,8 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream"> = (
 						: undefined;
 				return {
 					...anthropicOptions,
-					thinkingEnabled: reasoning !== undefined,
+					thinkingEnabled:
+						reasoning !== undefined || (options.providerAdaptiveReasoning && supportsProviderAdaptiveThinking(model)),
 					...(effort !== undefined ? { effort } : {}),
 					...(thinkingBudgetTokens !== undefined ? { thinkingBudgetTokens } : {}),
 				};
@@ -1646,7 +1652,8 @@ function buildAdditionalModelRequestFields(
 ): Record<string, unknown> | undefined {
 	const reasoning = options.reasoning;
 	if (!model.reasoning) return undefined;
-	if (!reasoning) {
+	const providerAdaptive = options.providerAdaptiveReasoning && supportsProviderAdaptiveThinking(model);
+	if (!reasoning && !providerAdaptive) {
 		if (model.compat.disabledThinking === "disabled") {
 			return { thinking: { type: "disabled" }, output_config: { effort: "low" } };
 		}
@@ -1655,7 +1662,7 @@ function buildAdditionalModelRequestFields(
 
 	const mode = model.thinking?.mode;
 	if (mode === "anthropic-adaptive") {
-		const effort = mapEffortToAnthropicAdaptiveEffort(model, reasoning);
+		const effort = reasoning === undefined ? undefined : mapEffortToAnthropicAdaptiveEffort(model, reasoning);
 		// Starting with Claude Opus 4.7 and Claude Fable/Mythos 5, Anthropic switched
 		// the adaptive-thinking default to "omitted", which silently suppresses
 		// streamed reasoning and can read as a stalled stream during long reasoning
@@ -1667,10 +1674,11 @@ function buildAdditionalModelRequestFields(
 		}
 		return {
 			thinking: adaptive,
-			output_config: { effort },
+			...(effort !== undefined ? { output_config: { effort } } : {}),
 		};
 	}
 
+	if (!reasoning) return undefined;
 	if (mode === "effort") {
 		// OpenAI-schema models on Bedrock (the GPT-5.x SKUs) reject the
 		// Anthropic budget block with `unknown_parameter: 'thinking'` and take

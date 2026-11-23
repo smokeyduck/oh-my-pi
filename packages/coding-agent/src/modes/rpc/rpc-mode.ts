@@ -81,6 +81,7 @@ import type { MCPManager } from "../../mcp/manager";
 import { reconnectMcpManagerServer } from "../../mcp/oauth-reauth";
 import type { DroppedPrompt, RestoredQueuedMessage } from "../../session/agent-session-types";
 import { CACHE_WARMING_MODES } from "../../session/cache-warmer";
+import { desktopThinkingEnabled } from "../../session/desktop-thinking";
 import { probeSessionLeases } from "../../session/session-storage";
 import { SKILL_PROMPT_MESSAGE_TYPE, USER_INTERRUPT_LABEL } from "../../session/messages";
 import { findMostRecentNonEmptySession, findRecentSessionContinuation } from "../../session/session-listing";
@@ -3180,6 +3181,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 				// A goal exit triggered by the last turn restores tools asynchronously; report after it.
 				await goalController.settled();
 				const queuedMessages = session.getQueuedMessages();
+				const thinkingLevels = session.getAvailableEffortSelectors();
 				const state: RpcSessionState = {
 					collab: collabController.state,
 					model: session.model,
@@ -3187,7 +3189,8 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 					thinkingConfigured: session.configuredThinkingLevel(),
 					availableThinkingLevels: [...session.getAvailableThinkingLevels()],
 					configuredThinkingLevel: session.configuredThinkingLevel(),
-					thinkingLevels: session.getAvailableEffortSelectors(),
+					thinkingLevels,
+					thinkingAutoMode: desktopThinkingEnabled() && thinkingLevels.includes("auto") ? "provider" : undefined,
 					isStreaming: session.isStreaming,
 					isCompacting: session.isCompacting,
 					isBackgroundCompacting: session.isBackgroundCompacting,
@@ -3753,6 +3756,9 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 			// =================================================================
 
 			case "set_thinking_level": {
+				if (desktopThinkingEnabled() && command.level === "auto" && !session.getAvailableEffortSelectors().includes("auto")) {
+					return error(id, "set_thinking_level", "This model does not support provider-adaptive reasoning");
+				}
 				session.setThinkingLevel(command.level);
 				return success(id, "set_thinking_level", {
 					thinkingLevel: session.thinkingLevel,
@@ -4928,6 +4934,22 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 					});
 				} catch (err: unknown) {
 					return error(id, "set_setting", err instanceof Error ? err.message : String(err));
+				}
+			}
+
+			case "reset_settings": {
+				if (session.isStreaming || session.isCompacting || session.isBackgroundCompacting) {
+					return error(id, "reset_settings", "Settings cannot be reset while the session is working.");
+				}
+				try {
+					for (const setting of orderedSettings()) {
+						if (!setting.isCredential) setting.unset(session.settings);
+					}
+					await session.settings.flush();
+					output({ type: "config_update", model: session.model, thinkingLevel: session.thinkingLevel });
+					return success(id, "reset_settings");
+				} catch (err: unknown) {
+					return error(id, "reset_settings", err instanceof Error ? err.message : String(err));
 				}
 			}
 

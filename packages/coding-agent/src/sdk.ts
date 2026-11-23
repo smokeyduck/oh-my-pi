@@ -73,6 +73,11 @@ import { shouldEnableAppendOnlyContext } from "./config/append-only-context-mode
 import { shouldInlineToolDescriptors } from "./config/inline-tool-descriptors-mode";
 import { isAuthenticated, kNoAuth, ModelRegistry } from "./config/model-registry";
 import {
+	hasVerifiedThinkingControl,
+	supportsProviderAdaptiveThinking,
+	withoutUnverifiedThinking,
+} from "@oh-my-pi/pi-catalog/model-thinking";
+import {
 	disabledProviderIds,
 	formatModelStringWithRouting,
 	getModelMatchPreferences,
@@ -278,6 +283,7 @@ import {
 	type SystemPromptRebuilder,
 	standbyTools,
 } from "./session/session-tools";
+import { desktopThinkingEnabled, desktopThinkingSetting, resolveDesktopThinkingLevel } from "./session/desktop-thinking";
 import { anthropicSlowModeHasNoSiblingHeadroom } from "./session/anthropic-slow-mode";
 import {
 	CacheWarmer,
@@ -931,6 +937,8 @@ export interface CreateAgentSessionOptions {
 	skipPythonPreflight?: boolean;
 	/** Tool names explicitly requested (enables disabled-by-default tools) */
 	toolNames?: string[];
+	/** Built-ins excluded by the embedding host; does not filter extensions. */
+	disabledBuiltinTools?: ReadonlySet<string>;
 	/** Names from `toolNames` that a fork inherits as tool commands rather than explicit top-level tools. */
 	mountedToolNames?: string[];
 	/** Limit the session to explicitly supplied tool names, without discovered extras. */
@@ -2431,6 +2439,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 	// outranks the model's defaultLevel. Run again after extension role reclaim
 	// so the final model's own defaults aren't masked by an earlier fallback
 	// model's.
+	const desktopThinking = desktopThinkingEnabled();
 	const pickInitialThinkingLevel = (selectedModel: Model | undefined): ConfiguredThinkingLevel | undefined => {
 		let level = options.thinkingLevel;
 		if (level === undefined && hasExistingSession && hasThinkingEntry) {
@@ -2446,6 +2455,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			!hasExplicitModel && !hasThinkingEntry && defaultRoleSpec.explicitThinkingLevel
 				? defaultRoleSpec.thinkingLevel
 				: undefined;
+		if (desktopThinking) return roleLevel ?? desktopThinkingSetting(settings);
 		return newSessionThinkingLevel(
 			selectedModel,
 			roleLevel,
@@ -2453,16 +2463,20 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		);
 	};
 	let thinkingLevel = pickInitialThinkingLevel(model);
-	let autoThinking = thinkingLevel === AUTO_THINKING;
+	let autoThinking = !desktopThinking && thinkingLevel === AUTO_THINKING;
 	// Concrete level the agent/session start with. With `auto` this is the
 	// provisional level shown until the first per-turn classification resolves;
 	// `auto` itself stays a session-only concept handled by AgentSession.
-	let effectiveThinkingLevel: ThinkingLevel | undefined = concreteThinkingLevel(thinkingLevel);
+	const resolveInitialThinking = (selectedModel: Model | undefined) =>
+		desktopThinking
+			? resolveDesktopThinkingLevel(selectedModel, thinkingLevel, options.thinkingLevelCeiling)
+			: resolveConfiguredThinkingLevel(selectedModel, thinkingLevel);
+	let effectiveThinkingLevel: ThinkingLevel | undefined = desktopThinking
+		? undefined
+		: concreteThinkingLevel(thinkingLevel);
 	if (model) {
 		const resolvedModel = model;
-		effectiveThinkingLevel = logger.time("resolveThinkingLevelForModel", () =>
-			resolveConfiguredThinkingLevel(resolvedModel, thinkingLevel),
-		);
+		effectiveThinkingLevel = logger.time("resolveThinkingLevelForModel", () => resolveInitialThinking(resolvedModel));
 		// Fire-and-forget connection warm-up so the handshake overlaps the rest
 		// of session setup (extension/skill load, tool registry, system prompt
 		// build). Effective for endpoints known before any request (official
@@ -2495,10 +2509,8 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 	// so the settings default is clamped to the model's actual effort ladder.
 	const adoptThinkingForModel = (selectedModel: Model): void => {
 		thinkingLevel = pickInitialThinkingLevel(selectedModel);
-		autoThinking = thinkingLevel === AUTO_THINKING;
-		effectiveThinkingLevel = logger.time("resolveThinkingLevelForModel", () =>
-			resolveConfiguredThinkingLevel(selectedModel, thinkingLevel),
-		);
+		autoThinking = !desktopThinking && thinkingLevel === AUTO_THINKING;
+		effectiveThinkingLevel = logger.time("resolveThinkingLevelForModel", () => resolveInitialThinking(selectedModel));
 	};
 
 	let skills: Skill[];
@@ -2593,6 +2605,9 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 	let hasSession = false;
 	let hasRegistered = false;
 	const restrictToolNames = options.restrictToolNames === true;
+	// A desktop Work profile restricts tools, not the local memory lifecycle. Plain chat stays isolated.
+	const enableMemory =
+		!restrictToolNames || (process.env.WISA_STUDIO_DEFAULTS === "1" && !isChatSession(sessionManager));
 	// The session tree shares one cost gate: a subagent is given its parent's; a root
 	// session owns one that follows its session file. Read it per request, so a request
 	// lands on the gate of the session file it was sent for.
@@ -2736,7 +2751,9 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				);
 			},
 			restrictToolNames,
+			disabledBuiltinTools: options.disabledBuiltinTools,
 			get hasEditTool() {
+				if (options.disabledBuiltinTools?.has("edit")) return false;
 				const requestedToolNames = options.toolNames ? normalizeToolNames(options.toolNames) : undefined;
 				return restrictToolNames
 					? requestedToolNames?.includes("edit") === true
@@ -4496,7 +4513,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					setActiveRules(nextActiveRules);
 				}
 			}
-			const memoryBackend = restrictToolNames ? undefined : await resolveMemoryBackend(settings);
+			const memoryBackend = enableMemory ? await resolveMemoryBackend(settings) : undefined;
 			const memoryInstructions = memoryBackend
 				? await memoryBackend.buildDeveloperInstructions(agentDir, sessionManager.getCwd(), settings, session)
 				: undefined;
@@ -4538,7 +4555,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			// name is not built-in, and the settings reconcile adds/removes the built-ins
 			// as `autolearn.enabled` flips — so a subagent that filtered them out or a
 			// same-named custom tool while auto-learn is off get no guidance.
-			const autoLearnInstructions = restrictToolNames
+			const autoLearnInstructions = !enableMemory
 				? undefined
 				: buildAutoLearnInstructions({
 						manageSkill: hasSession
@@ -5064,9 +5081,20 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			if (cfgOffline.get(settings) && streamModel.provider !== session?.model?.provider) {
 				return Promise.reject(new Error("Offline mode restricts model calls to the active session provider."));
 			}
+			// Fallbacks, advisors and turn overrides must not turn a provisional catalog
+			// hypothesis into probe traffic or a reasoning control on the request.
+			const suppressUnverified = desktopThinking && !hasVerifiedThinkingControl(streamModel);
 			return withCredentialRedaction(cfgSecretsEnabled.get(settings), () =>
-				settingsBoundStreamFn(streamModel, context, {
+				settingsBoundStreamFn(suppressUnverified ? withoutUnverifiedThinking(streamModel) : streamModel, context, {
 					...streamOptions,
+					...(suppressUnverified
+						? {
+								reasoning: undefined,
+								disableReasoning: undefined,
+								forceReasoningOff: undefined,
+								providerAdaptiveReasoning: undefined,
+							}
+						: {}),
 					thinkingCapabilityDbPath: modelRegistry.modelsDbPath,
 				}),
 			);
@@ -5182,11 +5210,18 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					supportsExternalThinking(streamModel);
 				const fallbackCreditRedemption = session?.consumeActiveFallbackCreditRedemption(streamModel);
 				if (streamOptions?.promptCacheKey === undefined) session?.promoteTaskSiblingCandidate(streamModel);
+				const desktopSelector = desktopThinking ? session?.configuredThinkingLevel() : undefined;
 				const merged: SimpleStreamOptions = {
 					...streamOptions,
 					promptCacheKey: streamOptions?.promptCacheKey ?? session?.getPromptCacheKeyForModel(streamModel),
 					forceReasoningOff: externalThinking || streamOptions?.forceReasoningOff,
 					omitDemotedReasoning: session?.omitsDemotedReasoning(streamModel) || streamOptions?.omitDemotedReasoning,
+					// The loop can fall back to its initial pin when a live thinking selector
+					// becomes unset. A deliberate desktop default must clear that stale pin.
+					...(desktopSelector === AUTO_THINKING || desktopSelector === "inherit" ? { reasoning: undefined } : {}),
+					...(desktopSelector === AUTO_THINKING && supportsProviderAdaptiveThinking(streamModel)
+						? { providerAdaptiveReasoning: true }
+						: {}),
 				};
 				// The provider calls `onPayload` as it sends, past any wait for an in-flight
 				// slot: the prompt cache entry's lifetime starts there, not here.
@@ -5393,6 +5428,8 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		const advisorTaskAgents = await TaskTool.discoverAgents(createAdvisorToolSession());
 		const advisorBuiltinNames = Object.keys(BUILTIN_TOOLS) as Array<keyof typeof BUILTIN_TOOLS>;
 		const buildAdvisorTool = (name: keyof typeof BUILTIN_TOOLS, advisorSession: ToolSession): Tool | null => {
+			// An advisor's delegated grants cannot widen a restricted host profile.
+			if (restrictToolNames && !builtInRegistryToolNames.has(name)) return null;
 			if (name === "task") return TaskTool.withAgents(advisorSession, advisorTaskAgents);
 			const tool = BUILTIN_TOOLS[name](advisorSession);
 			if (tool instanceof Promise) throw new Error(`Advisor tool "${name}" must build synchronously`);
@@ -5558,7 +5595,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 						return mcpManager.getTools();
 					}
 				: undefined,
-			memoryEnabled: !restrictToolNames,
+			memoryEnabled: enableMemory,
 			memoryAgentDir: agentDir,
 			memoryTaskDepth: taskDepth,
 			createMemoryTools: restrictToolNames
@@ -6349,7 +6386,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		// `learn`/`manage_skill` on the same setting, and captures resolve those
 		// tools per run. The subscription lives for the session's lifetime; the
 		// reference is intentionally discarded (the listener retains it).
-		if (!restrictToolNames) {
+		if (enableMemory) {
 			if (cfgAutolearnEnabled.get(settings) && taskDepth === 0) {
 				await logger.time("startMemoryStartupTask", startMemoryBackend);
 			} else {

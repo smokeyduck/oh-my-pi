@@ -49,6 +49,7 @@ interface ThinkingPayload {
 	additionalModelRequestFields?: {
 		thinking?: { type?: string; budget_tokens?: number };
 		reasoning?: { effort?: string };
+		output_config?: { effort?: string };
 	};
 }
 
@@ -121,4 +122,12 @@ describe("Bedrock explicit reasoning-off preserves caller output caps", () => {
 		expect(payload.additionalModelRequestFields?.thinking).toMatchObject({ type: "enabled" });
 		expect(payload.inferenceConfig?.maxTokens).toBeGreaterThan(32);
 	});
+});
+
+test("Bedrock provider Auto sends adaptive thinking without an effort or added budget", async () => {
+	const payload = await capture(adaptiveModel(), { maxTokens: 32, providerAdaptiveReasoning: true });
+	expect(payload.inferenceConfig?.maxTokens).toBe(32);
+	expect(payload.additionalModelRequestFields?.thinking).toMatchObject({ type: "adaptive" });
+	expect(payload.additionalModelRequestFields?.thinking?.budget_tokens).toBeUndefined();
+	expect(payload.additionalModelRequestFields?.output_config).toBeUndefined();
 });

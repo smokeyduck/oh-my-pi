@@ -476,6 +476,7 @@ import {
 	USER_INTERRUPT_LABEL,
 	VIBE_MODE_CONTEXT_MESSAGE_TYPE,
 } from "./messages";
+import { desktopThinkingEnabled, desktopThinkingSetting } from "./desktop-thinking";
 import { ModelControls, type ModelControlsHost } from "./model-controls";
 import {
 	isPrewalkPlanNudge,
@@ -15543,7 +15544,9 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			const hasServiceTierEntry = this.sessionManager
 				.getBranch()
 				.some(entry => entry.type === "service_tier_change");
-			const defaultThinkingLevel = parseConfiguredThinkingLevel(cfgDefaultThinkingLevel.get(this.settings));
+			const defaultThinkingLevel = desktopThinkingEnabled()
+				? desktopThinkingSetting(this.settings)
+				: parseConfiguredThinkingLevel(cfgDefaultThinkingLevel.get(this.settings));
 			const configuredServiceTierByFamily = buildServiceTierByFamily(
 				cfgTierOpenai.get(this.settings),
 				cfgTierAnthropic.get(this.settings),

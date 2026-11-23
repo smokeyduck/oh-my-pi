@@ -532,6 +532,7 @@ class ThinkingConfig:
     effort_budgets: dict[str, float] | None = None
     suppress_when_off: bool | None = None
     requires_effort: bool | None = None
+    unverified: bool | None = None
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -652,9 +653,11 @@ class SessionState:
     model: ModelInfo | None = None
     thinking_level: ThinkingLevel | None = None
     configured_thinking_level: ConfiguredThinkingLevel | None = None
-    """The user's thinking selector: `auto` while auto mode picks the effort, else `thinkingLevel`."""
+    """The user's thinking selector, which may not pin a concrete effort."""
     thinking_levels: tuple[ConfiguredThinkingLevel, ...] | None = None
-    """Selectors the active model accepts, as omp's thinking selector lists them: `off`, `auto`, then its efforts."""
+    """Selectors the active model accepts."""
+    thinking_auto_mode: Literal["provider"] | None = None
+    """`auto` delegates to the provider instead of running the client classifier."""
     is_streaming: bool = False
     is_compacting: bool = False
     is_background_compacting: bool = False
@@ -2169,6 +2172,7 @@ def parse_thinking_config(value: object, path: str = "ThinkingConfig") -> Thinki
         effort_budgets=optional(payload, "effortBudgets", record(decode_float), path),
         suppress_when_off=optional(payload, "suppressWhenOff", decode_bool, path),
         requires_effort=optional(payload, "requiresEffort", decode_bool, path),
+        unverified=optional(payload, "unverified", decode_bool, path),
     )
 
 
@@ -2299,6 +2303,7 @@ def parse_session_state(value: object, path: str = "SessionState") -> SessionSta
         thinking_level=optional(payload, "thinkingLevel", _decode_thinking_level, path),
         configured_thinking_level=optional(payload, "configuredThinkingLevel", _decode_configured_thinking_level, path),
         thinking_levels=optional(payload, "thinkingLevels", array(_decode_configured_thinking_level), path),
+        thinking_auto_mode=optional(payload, "thinkingAutoMode", cast('Decoder[Literal["provider"]]', literal(frozenset({"provider"}))), path),
         is_streaming=defaulted(payload, "isStreaming", decode_bool, path, False),
         is_compacting=defaulted(payload, "isCompacting", decode_bool, path, False),
         is_background_compacting=defaulted(payload, "isBackgroundCompacting", decode_bool, path, False),

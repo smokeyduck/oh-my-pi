@@ -826,6 +826,8 @@ export interface SimpleStreamOptions extends Omit<StreamOptions, "apiKey"> {
 	 */
 	apiKey?: ApiKey;
 	reasoning?: Effort;
+	/** Let a verified adaptive provider choose reasoning without a fixed effort or budget. */
+	providerAdaptiveReasoning?: boolean;
 	/**
 	 * Force-disable reasoning for the request even when the model supports it.
 	 * Takes precedence over `reasoning`. Useful for fast utility calls

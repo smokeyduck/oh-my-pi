@@ -4,6 +4,7 @@ import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { kNoAuth } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import {
 	type ModelLookupRegistry,
+	previewSubagentModel,
 	resolveModelOverrideWithAuthFallback,
 } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -75,6 +76,75 @@ function createMockRegistry(options: MockRegistryOptions): ModelLookupRegistry &
 			options.authedProviders.has(model.provider) ? "sk-test-token" : undefined,
 	} as unknown as ModelLookupRegistry & { getApiKey(model: Model<Api>): Promise<string | undefined> };
 }
+
+describe("automatic subagent role routing", () => {
+	const patterns = ["opencode-zen/qwen3.6-plus-free", "deepseek/shared-id"];
+	const parent = "deepseek/deepseek-v4-pro";
+	const options = { preferHealthy: true };
+
+	test("skips a provider that is disabled or a preferred selector in cooldown, but explicit picks ignore cooldown", async () => {
+		const registry = {
+			...createMockRegistry({
+				models: [parentModel, unauthedTaskModel, sharedModel],
+				authedProviders: new Set(["deepseek", "opencode-zen"]),
+			}),
+			isSelectorSuppressed: (selector: string) => selector === patterns[0],
+		};
+		const auto = await resolveModelOverrideWithAuthFallback(
+			patterns,
+			parent,
+			registry,
+			undefined,
+			undefined,
+			options,
+		);
+		expect(auto.model).toBe(sharedModel);
+		expect(auto.authFallbackUsed).toBe(false);
+		const manual = await resolveModelOverrideWithAuthFallback(patterns, parent, registry);
+		expect(manual.model).toBe(unauthedTaskModel);
+		const disabled = Settings.isolated({ disabledProviders: ["opencode-zen"] });
+		expect(previewSubagentModel(patterns, parent, registry, disabled).model).toBe(sharedModel);
+	});
+
+	test("tries another eligible role candidate when the listed provider has no usable key", async () => {
+		const registry = createMockRegistry({
+			models: [parentModel, sharedModel, unauthedTaskModel],
+			authedProviders: new Set(["deepseek"]),
+		});
+		expect(previewSubagentModel(patterns, parent, registry, undefined, options).model).toBe(unauthedTaskModel);
+		const selected = await resolveModelOverrideWithAuthFallback(
+			patterns,
+			parent,
+			registry,
+			undefined,
+			undefined,
+			options,
+		);
+		expect(selected.model).toBe(sharedModel);
+		expect(selected.authFallbackUsed).toBe(false);
+	});
+
+	test("uses the parent if no role candidate is eligible on the allowed provider", async () => {
+		const registry = createMockRegistry({
+			models: [parentModel, unauthedTaskModel],
+			authedProviders: new Set(["deepseek", "opencode-zen"]),
+		});
+		const restricted = { ...options, allowedProvider: "deepseek" };
+		const preview = previewSubagentModel(patterns, parent, registry, undefined, restricted);
+		expect(preview.model).toBe(parentModel);
+		expect(preview.usesParentFallback).toBe(true);
+		const run = await resolveModelOverrideWithAuthFallback(
+			patterns,
+			parent,
+			registry,
+			undefined,
+			undefined,
+			restricted,
+		);
+		expect(run.model).toBe(parentModel);
+		expect(run.authFallbackUsed).toBe(true);
+	});
+});
 
 describe("issue #985: subagent dispatch auth fallback", () => {
 	test("tries configured authenticated fallbacks before the parent model", async () => {

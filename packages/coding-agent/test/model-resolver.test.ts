@@ -1254,7 +1254,7 @@ describe("resolveAgentModelPatterns", () => {
 				agentModel: ["@definition"],
 				settings,
 			}),
-		).toEqual({ patterns: ["openai/gpt-4o"], role: "override" });
+		).toEqual({ patterns: ["openai/gpt-4o"], role: "override", source: "override" });
 
 		expect(
 			resolveAgentModelSelection({
@@ -1263,7 +1263,7 @@ describe("resolveAgentModelPatterns", () => {
 				agentModel: ["@definition"],
 				settings,
 			}),
-		).toEqual({ patterns: ["anthropic/claude-sonnet-4-5"], role: "definition" });
+		).toEqual({ patterns: ["anthropic/claude-sonnet-4-5"], role: "definition", source: "configuredRole" });
 
 		// An explicit selector carries no role identity, so the child must not
 		// capture the routing of a role that happens to name the same model.
@@ -1274,7 +1274,7 @@ describe("resolveAgentModelPatterns", () => {
 				agentModel: ["@definition"],
 				settings,
 			}),
-		).toEqual({ patterns: ["openai/gpt-4o"], role: undefined });
+		).toEqual({ patterns: ["openai/gpt-4o"], role: undefined, source: "request" });
 	});
 
 	test("falls back to the active session model when @task is unset", () => {
@@ -1323,13 +1323,23 @@ describe("resolveAgentModelPatterns", () => {
 		expect(result).toEqual(["anthropic/claude-sonnet-4-6", "zai/glm-5.2:high"]);
 	});
 
-	test("uses default for unconfigured smol and slow agent roles before priority defaults", () => {
-		const settings = Settings.isolated({
-			modelRoles: { default: "local/llama" },
+	test("uses catalog role chains ahead of the general default, without overriding explicit agent choices", () => {
+		const settings = Settings.isolated({ modelRoles: { default: "local/llama" } });
+		for (const role of ["smol", "slow"]) {
+			expect(resolveAgentModelSelection({ agentModel: `@${role}`, settings })).toEqual({
+				patterns: rolePriorityDefaults(role),
+				role,
+				source: "catalogRole",
+			});
+		}
+		expect(resolveAgentModelSelection({ agentModel: "@smol", settingsOverride: "@smol", settings })).toEqual({
+			patterns: ["local/llama"],
+			role: "smol",
+			source: "override",
 		});
-
-		expect(resolveAgentModelPatterns({ agentModel: "@smol", settings })).toEqual(["local/llama"]);
-		expect(resolveAgentModelPatterns({ agentModel: "@slow", settings })).toEqual(["local/llama"]);
+		expect(
+			resolveAgentModelPatterns({ agentModel: "@default", settings, activeModelPattern: "openai/gpt-4o" }),
+		).toEqual(["openai/gpt-4o"]);
 	});
 
 	test("uses configured smol for unconfigured tiny before priority defaults", () => {
@@ -1431,7 +1441,7 @@ describe("resolveAgentModelPatterns", () => {
 			modelRoles: { default: "@slow", slow: "anthropic/claude-sonnet-4-5" },
 		});
 
-		expect(resolveAgentModelPatterns({ agentModel: "@smol", settings })).toEqual(["anthropic/claude-sonnet-4-5"]);
+		expect(resolveConfiguredModelPatterns("@smol", settings)).toEqual(["anthropic/claude-sonnet-4-5"]);
 	});
 
 	test("slow priority falls forward to Opus 4.8 before older Opus aliases", () => {

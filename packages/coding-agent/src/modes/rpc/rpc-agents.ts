@@ -8,9 +8,12 @@
  *   revives parked ones; unknown/aborted ids surface as `not_parked`.
  */
 
+import { cfgOffline } from "../../config/auxiliary-model-policy";
 import {
-	formatModelString,
-	resolveAgentModelPatterns,
+	type AgentModelSelection,
+	formatModelStringWithRouting,
+	previewSubagentModel,
+	resolveAgentModelSelection,
 	resolveAgentPrewalkPattern,
 	resolveModelOverride,
 } from "../../config/model-resolver";
@@ -32,19 +35,23 @@ export interface RpcSubagentActionResult {
 
 /** Workspace-visible definitions and the same model/prewalk projection as the TUI control center. */
 export async function buildRpcAgentDefinitions(session: AgentSession): Promise<RpcAgentDefinitionsResult> {
-	const { agents } = await discoverAgents(session.sessionManager.getCwd());
-	const activeModelPattern = session.model ? formatModelString(session.model) : undefined;
+	const { agents } = await discoverAgents(session.sessionManager.getCwd(), undefined, session.effectiveExtensionRoots);
+	const activeModelPattern = session.model ? formatModelStringWithRouting(session.model) : undefined;
 	const defaultModelPattern = session.settings.getModelRole("default");
 	const modelOverrides = cfgTaskAgentModelOverrides.get(session.settings);
 	const prewalkOverrides = cfgTaskAgentPrewalk.get(session.settings);
 	const taskPrewalk = cfgTaskPrewalk.get(session.settings);
-	const resolve = (patterns: string[]): { model?: string; thinkingLevel?: string } => {
-		const result = resolveModelOverride(patterns, session.modelRegistry, session.settings);
-		return {
-			model: result.model ? formatModelString(result.model) : undefined,
-			thinkingLevel: result.thinkingLevel,
-		};
+	const models = session.modelRegistry.getAvailable();
+	const registry = {
+		getAvailable: () => models,
+		isSelectorSuppressed: (selector: string) => session.modelRegistry.isSelectorSuppressed(selector),
 	};
+	const allowedProvider = cfgOffline.get(session.settings) ? (session.model?.provider ?? null) : undefined;
+	const preview = ({ patterns, source }: AgentModelSelection) =>
+		previewSubagentModel(patterns, activeModelPattern, registry, session.settings, {
+			allowedProvider,
+			preferHealthy: source === "catalogRole",
+		});
 
 	return {
 		agents: agents.map(agent => {
@@ -54,18 +61,18 @@ export async function buildRpcAgentDefinitions(session: AgentSession): Promise<R
 				activeModelPattern,
 				fallbackModelPattern: defaultModelPattern,
 			};
-			const defaultPatterns = resolveAgentModelPatterns(base);
-			const effectivePatterns = resolveAgentModelPatterns({
-				...base,
-				settingsOverride: modelOverrides[agent.name],
-			});
-			const defaultResolution = resolve(defaultPatterns);
-			const effectiveResolution = resolve(effectivePatterns);
+			const defaults = resolveAgentModelSelection(base);
+			const override = modelOverrides[agent.name];
+			const effective = override ? resolveAgentModelSelection({ ...base, settingsOverride: override }) : defaults;
+			const defaultResolution = preview(defaults);
+			const effectiveResolution = effective === defaults ? defaultResolution : preview(effective);
 			const prewalkPattern = resolveAgentPrewalkPattern({
 				settingsOverride: prewalkOverrides[agent.name],
 				agentPrewalk: resolveAgentPrewalkDefault(agent, taskPrewalk),
 			});
-			const prewalkResolution = prewalkPattern ? resolve([prewalkPattern]) : {};
+			const prewalkModel = prewalkPattern
+				? resolveModelOverride([prewalkPattern], registry, session.settings).model
+				: undefined;
 			return {
 				name: agent.name,
 				description: agent.description,
@@ -80,13 +87,19 @@ export async function buildRpcAgentDefinitions(session: AgentSession): Promise<R
 				blocking: agent.blocking,
 				readSummarize: agent.readSummarize,
 				prewalk: agent.prewalk,
-				defaultPatterns,
-				defaultResolved: defaultResolution.model,
-				effectivePatterns,
-				effectiveResolved: effectiveResolution.model,
+				defaultPatterns: defaults.patterns,
+				defaultResolved: defaultResolution.model && formatModelStringWithRouting(defaultResolution.model),
+				effectivePatterns: effective.patterns,
+				effectiveResolved: effectiveResolution.model && formatModelStringWithRouting(effectiveResolution.model),
 				effectiveThinkingLevel: effectiveResolution.thinkingLevel,
+				modelSelection: {
+					source: effective.source,
+					role: effective.role,
+					provider: effectiveResolution.model?.provider,
+					usesParentFallback: effectiveResolution.usesParentFallback,
+				},
 				prewalkPattern,
-				prewalkResolved: prewalkResolution.model,
+				prewalkResolved: prewalkModel && formatModelStringWithRouting(prewalkModel),
 			};
 		}),
 	};

@@ -107,8 +107,7 @@ async function createHub(settings: TestSettings): Promise<{
 				return agents;
 			},
 			getAvailableModels: () => [sonnet],
-			effectiveModelPatterns: agent => (agent.overrideModel ? [agent.overrideModel] : []),
-			resolvePatterns: () => undefined,
+			previewAgentModel: agent => ({ patterns: agent.overrideModel ? [agent.overrideModel] : [] }),
 			effectivePrewalkPattern: () => undefined,
 			effectiveAdvisorPattern: agent => (agent.advisorOverride === "on" ? "@advisor" : undefined),
 			setAgentDisabled: (name, { disabled }) =>

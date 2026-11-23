@@ -44,6 +44,7 @@ import type { GoalStatus } from "@oh-my-pi/pi-tui/tools/goal";
 import type { AgentProgress } from "@oh-my-pi/pi-tui/tools/task";
 import type { TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import type { ProviderDiscoveryState } from "../../config/model-provider-discovery";
+import type { AgentModelSelectionSource } from "../../config/model-resolver";
 import type { BashResult } from "../../exec/bash-executor";
 import type {
 	ContextUsage,
@@ -2141,6 +2142,13 @@ export interface RpcAgentDefinitionInfo {
 	effectivePatterns: string[];
 	effectiveResolved?: string;
 	effectiveThinkingLevel?: string;
+	/** Initial choice from the current catalog, not a provider reachability test. */
+	modelSelection: {
+		source: AgentModelSelectionSource;
+		role?: string;
+		provider?: string;
+		usesParentFallback: boolean;
+	};
 	prewalkPattern?: string;
 	prewalkResolved?: string;
 	source: "bundled" | "user" | "project";

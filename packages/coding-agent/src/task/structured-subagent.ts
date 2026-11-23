@@ -207,6 +207,8 @@ export interface EffectiveSubagentPolicy {
 	modelOverride?: string[];
 	/** Explicit pre-expansion model role alias selected for this run. */
 	modelRole?: string;
+	/** This agent's unconfigured role uses live catalog availability and known cooldowns. */
+	preferHealthyModel?: boolean;
 	/** Extension routing note explaining a `before_subagent_spawn` model replacement. */
 	modelRoute?: string;
 	/** Exact-name `task.agentServiceTierOverrides` entry for this agent, applied after model resolution. */
@@ -602,8 +604,12 @@ export async function resolveEffectiveSubagentPolicy(
 	// from different sources: the expansion below discards the alias, and the
 	// child's inherited retry-fallback chain is keyed off the role. A per-call
 	// model is already one exact selector and stays literal, never a role alias.
-	const { patterns: modelOverride, role: modelRole } = perCallModelGrants
-		? { patterns: [(perCallSelector as string).trim()], role: undefined }
+	const {
+		patterns: modelOverride,
+		role: modelRole,
+		source,
+	} = perCallModelGrants
+		? { patterns: [(perCallSelector as string).trim()], role: undefined, source: "request" }
 		: resolveAgentModelSelection(modelResolution);
 	const isolationEnabled = cfgTaskIsolationEnabled.get(request.session.settings);
 	const isIsolated = request.isolation?.requested === true;
@@ -620,6 +626,7 @@ export async function resolveEffectiveSubagentPolicy(
 		effectiveAgent,
 		modelOverride,
 		modelRole,
+		preferHealthyModel: source === "catalogRole" || undefined,
 		serviceTierOverride,
 		compactionThresholdOverride,
 		oauthAccountPools,
@@ -676,7 +683,7 @@ async function applySpawnHook(
 	if (spawnResult?.model === undefined) return policy;
 	const replacement = resolveConfiguredModelPatterns(spawnResult.model, request.session.settings);
 	if (replacement.length === 0) return policy;
-	return { ...policy, modelOverride: replacement, modelRoute: spawnResult.note };
+	return { ...policy, modelOverride: replacement, preferHealthyModel: undefined, modelRoute: spawnResult.note };
 }
 
 /** Reserve a session-global agent id only after preflight has succeeded. */
@@ -775,6 +782,7 @@ function buildExecutorOptions(
 		acquiredAt: request.acquiredAt,
 		modelOverride: policy.modelOverride,
 		modelRole: policy.modelRole,
+		preferHealthyModel: policy.preferHealthyModel,
 		modelRoute: policy.modelRoute,
 		serviceTierOverride: policy.serviceTierOverride,
 		compactionThresholdOverride: policy.compactionThresholdOverride,

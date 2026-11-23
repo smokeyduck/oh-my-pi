@@ -505,6 +505,8 @@ export interface ExecutorOptions {
 	modelOverride?: string | string[];
 	/** Explicit pre-expansion model role alias selected for this run. */
 	modelRole?: string;
+	/** Automatic catalog selection may skip models on a known cooldown. */
+	preferHealthyModel?: boolean;
 	/** Extension routing note for the chosen model; surfaced as `resolvedModelRoute`. */
 	modelRoute?: string;
 	/**
@@ -5127,7 +5129,7 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 					modelRegistry,
 					settings,
 					id,
-					{ exactOnly: !!options.perCallModelGrants, allowedProvider },
+					{ exactOnly: !!options.perCallModelGrants, allowedProvider, preferHealthy: options.preferHealthyModel },
 				),
 			);
 			if (cfgOffline.get(settings) && !model) {
@@ -5145,7 +5147,7 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 				});
 			}
 			if (authFallbackUsed && model) {
-				logger.warn("Subagent model has no working credentials; falling back to parent session model", {
+				logger.warn("Subagent model selection fell back to the parent session model", {
 					requested: modelPatterns,
 					parentModel: options.parentActiveModelPattern,
 					resolvedProvider: model.provider,

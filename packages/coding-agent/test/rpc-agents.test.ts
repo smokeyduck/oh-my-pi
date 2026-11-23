@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import {
 	applyRpcAbortSubagent,
 	applyRpcReviveSubagent,
@@ -40,6 +41,48 @@ describe("buildRpcAgentDefinitions", () => {
 			name: "task",
 			description: expect.any(String),
 			source: expect.stringMatching(/^(bundled|user|project)$/),
+		});
+	});
+
+	it("projects an eligible catalog role and reports a parent fallback or manual override honestly", async () => {
+		const model = (provider: string, id: string) =>
+			buildModel({
+				id,
+				name: id,
+				provider,
+				api: "openai-completions",
+				baseUrl: "https://example.test",
+				reasoning: false,
+				input: ["text"],
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				contextWindow: 128_000,
+				maxTokens: 8_192,
+			});
+		const parent = model("openai", "parent-model");
+		const scoutModel = model("anthropic", "claude-haiku-4-5");
+		const session = {
+			sessionManager: { getCwd: () => process.cwd() },
+			model: parent,
+			modelRegistry: { getAvailable: () => [parent, scoutModel], isSelectorSuppressed: vi.fn(() => false) },
+			settings: Settings.isolated({
+				modelRoles: { default: "openai/parent-model" },
+				task: { agentModelOverrides: { sonic: ["openai/parent-model", "anthropic/claude-haiku-4-5"] } },
+			}),
+		};
+		const definitions = () => buildRpcAgentDefinitions(session as unknown as AgentSession);
+		const { agents } = await definitions();
+		expect(agents.find(agent => agent.name === "scout")).toMatchObject({
+			effectiveResolved: "anthropic/claude-haiku-4-5",
+			modelSelection: { source: "catalogRole", role: "smol", provider: "anthropic", usesParentFallback: false },
+		});
+		expect(agents.find(agent => agent.name === "sonic")).toMatchObject({
+			effectiveResolved: "openai/parent-model",
+			modelSelection: { source: "override", provider: "openai", usesParentFallback: false },
+		});
+		session.modelRegistry.isSelectorSuppressed.mockReturnValue(true);
+		expect((await definitions()).agents.find(agent => agent.name === "scout")).toMatchObject({
+			effectiveResolved: "openai/parent-model",
+			modelSelection: { source: "catalogRole", role: "smol", provider: "openai", usesParentFallback: true },
 		});
 	});
 });

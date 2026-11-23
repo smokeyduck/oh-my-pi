@@ -7,11 +7,14 @@ import { shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
 import { isEnoent, prompt } from "@oh-my-pi/pi-utils";
 import { YAML } from "bun";
 import type { EffectiveExtensionRoots } from "../capability/types";
+import { cfgOffline } from "../config/auxiliary-model-policy";
 import { getConfigDirs } from "../config";
 import type { ModelRegistry } from "../config/model-registry";
 import {
+	formatModelStringWithRouting,
+	previewSubagentModel,
 	resolveAgentAdvisorSelection,
-	resolveAgentModelPatterns,
+	resolveAgentModelSelection,
 	resolveAgentPrewalkPattern,
 	resolveConfiguredModelPatterns,
 	resolveModelOverride,
@@ -83,24 +86,27 @@ export function createAgentsHubDeps(
 			});
 		},
 		getAvailableModels: () => modelRegistry.getAvailable(),
-		effectiveModelPatterns: agent =>
-			resolveAgentModelPatterns({
+		previewAgentModel: agent => {
+			const { patterns, source } = resolveAgentModelSelection({
 				settingsOverride: agent.overrideModel,
 				agentModel: agent.model,
 				settings,
 				activeModelPattern,
 				fallbackModelPattern: defaultModelPattern,
-			}),
-		resolvePatterns: patterns => {
-			if (patterns.length === 0) return undefined;
-			const { model, thinkingLevel, explicitThinkingLevel } = resolveModelOverride(
+			});
+			const allowedProvider = cfgOffline.get(settings)
+				? (resolveModelOverride(activeModelPattern ? [activeModelPattern] : [], modelRegistry, settings).model
+						?.provider ?? null)
+				: undefined;
+			const { model, thinkingLevel, explicitThinkingLevel } = previewSubagentModel(
 				patterns,
+				activeModelPattern,
 				modelRegistry,
 				settings,
+				{ allowedProvider, preferHealthy: source === "catalogRole" },
 			);
-			if (!model) return undefined;
 			const level = explicitThinkingLevel && thinkingLevel ? `:${thinkingLevel}` : "";
-			return `${model.provider}/${model.id}${level}`;
+			return { patterns, resolved: model ? `${formatModelStringWithRouting(model)}${level}` : undefined };
 		},
 		effectivePrewalkPattern: agent =>
 			resolveAgentPrewalkPattern({

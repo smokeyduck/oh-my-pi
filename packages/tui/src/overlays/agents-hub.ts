@@ -122,8 +122,7 @@ export interface AgentsHubDeps {
 	browserSource: ModelBrowserSource;
 	loadAgents: () => Promise<HubAgent[]>;
 	getAvailableModels: () => Model[];
-	effectiveModelPatterns: (agent: HubAgent) => string[];
-	resolvePatterns: (patterns: string[]) => string | undefined;
+	previewAgentModel: (agent: HubAgent) => { patterns: string[]; resolved?: string };
 	effectivePrewalkPattern: (agent: HubAgent) => string | undefined;
 	effectiveAdvisorPattern: (agent: HubAgent) => string | undefined;
 	/** Persist one agent's enabled state; other agents are untouched. */
@@ -437,8 +436,7 @@ export class AgentsHubComponent implements Component {
 	#describeProperty(agent: HubAgent, property: PropertyKind): string {
 		switch (property) {
 			case "model": {
-				const patterns = this.#deps.effectiveModelPatterns(agent);
-				const resolved = this.#deps.resolvePatterns(patterns);
+				const { patterns, resolved } = this.#deps.previewAgentModel(agent);
 				const base = agent.overrideModel ?? (patterns.length > 0 ? patterns.join(",") : "session model");
 				return `${agent.name} model: ${base}${resolved ? ` → ${resolved}` : ""}`;
 			}
@@ -1121,8 +1119,7 @@ export class AgentsHubComponent implements Component {
 		lines.push(theme.fg("border", "─".repeat(Math.max(1, width))));
 		if (agent) {
 			lines.push(truncateToWidth(` ${theme.fg("dim", replaceTabs(agent.description))}`, width));
-			const patterns = this.#deps.effectiveModelPatterns(agent);
-			const resolved = this.#deps.resolvePatterns(patterns);
+			const { patterns, resolved } = this.#deps.previewAgentModel(agent);
 			const modelLine = `${theme.fg("muted", "model:")} ${patterns.length > 0 ? replaceTabs(patterns.join(",")) : theme.fg("dim", "(session model)")}${resolved ? ` ${theme.fg("dim", "→")} ${theme.fg("success", resolved)}` : ""}`;
 			lines.push(truncateToWidth(` ${modelLine}`, width));
 			const prewalk = this.#deps.effectivePrewalkPattern(agent);
@@ -1535,8 +1532,7 @@ export class AgentsHubComponent implements Component {
 			];
 		}
 		const agent = rowDef.agent;
-		const patterns = this.#deps.effectiveModelPatterns(agent);
-		const resolved = this.#deps.resolvePatterns(patterns);
+		const { patterns, resolved } = this.#deps.previewAgentModel(agent);
 		const model: TspSpan[] = [patterns.length > 0 ? span(patterns.join(","), "mono") : span("session model", "dim")];
 		if (resolved) model.push(span(" → ", "dim"), span(resolved, "mono success"));
 		const prewalk = this.#deps.effectivePrewalkPattern(agent);
@@ -1670,8 +1666,7 @@ export class AgentsHubComponent implements Component {
 		if (!agent) {
 			return node("section", {}, [text([span("Select an agent to inspect", "dim")])], "detail");
 		}
-		const patterns = this.#deps.effectiveModelPatterns(agent);
-		const resolved = this.#deps.resolvePatterns(patterns);
+		const { patterns, resolved } = this.#deps.previewAgentModel(agent);
 		const model: TspSpan[] = [patterns.length > 0 ? span(patterns.join(",")) : span("(session model)", "dim")];
 		if (resolved) model.push(span(" → ", "dim"), span(resolved, "success"));
 		const prewalk = this.#deps.effectivePrewalkPattern(agent);

@@ -97,11 +97,13 @@ describe("bundled agent parsing", () => {
 			["sonic", "smol", "fast/hy3"],
 			["scout", "smol", "fast/hy3"],
 			["reviewer", "slow", "codex/sol"],
+			["security-reviewer", "slow", "codex/sol"],
 		] as const) {
 			const agent = getBundledAgent(name);
 			expect(resolveAgentModelSelection({ agentModel: agent?.model, settings })).toEqual({
 				patterns: [model],
 				role,
+				source: "configuredRole",
 			});
 		}
 	});

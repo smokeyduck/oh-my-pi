@@ -243,6 +243,10 @@ For task dispatch, model precedence is:
 
 A call's per-call `model` (task item / flat call, eval `agent()` / `workpool()`; see below) replaces steps 2 and 3 when it is approved. It is a conflict error, rather than outranking anything, for an agent with a step-1 entry or a mention agent whose tag names a level. Role aliases in steps 1 and 2 are expanded through `modelRoles`. Host callers (SDK `runStructuredSubagent({ model })`, `omp cleanse --model`) supply an ungated model ahead of the settings override.
 
+For a definition that only names an unconfigured `@smol` or `@slow` role, Core tries the catalog's role-specific priority list before the parent model. This keeps the bundled scout/sonic agents on the fast role and the bundled reviewers on the strong role when eligible models exist. Core uses the available chat catalog (enabled providers with configured credentials or keyless access), skips known model cooldowns on the launching registry, validates credentials at dispatch, and honors the `models.offline` provider restriction. A manual override, a configured role, or a per-call selection is not displaced by automatic role policy. There is no catalog priority list for `@task`: configure that role to route the general-purpose task agent separately.
+
+Agent Hub shows a catalog preview, not an uptime or quality score. A spawn may differ because of credential resolution, an extension routing hook, per-call policy, model discovery, or runtime retry/fallback.
+
 ### Per-call `model`
 
 `task.perCallModel` decides where a model-facing call may pick its model:

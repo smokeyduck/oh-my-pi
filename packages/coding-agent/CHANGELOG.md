@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- RPC hosts that explicitly enable `WISA_BTW_WORKSPACE_READ=1` give compatible Agent sessions' `/btw` turns a bounded workspace text reader. The normal tool catalog is not exposed to these turns. Chat sessions remain tool-free.
+
 ### Fixed
 
 - Isolated hosts can select a project configuration namespace with `PI_PROJECT_CONFIG_DIR` and disable ambient legacy configuration with `PI_CONFIG_SOURCES=native`, without changing normal CLI defaults or explicit profile opt-ins.

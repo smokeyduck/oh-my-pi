@@ -21,6 +21,7 @@ import {
 	getBtwTurnKey,
 } from "../../session/btw-history";
 import { beginBtwTurn, patchLatestBtwTurn, runBtwTurn } from "../../session/btw-turn";
+import { isChatSession } from "../../session/chat-session";
 import { cfgBtwInject } from "../settings";
 import type { RpcBtwDeltaFrame, RpcBtwHistoryRecord, RpcBtwInjectState, RpcBtwRecordFrame } from "./rpc-types";
 
@@ -322,10 +323,12 @@ export class RpcBtwController {
 	): Promise<void> {
 		if (this.#running !== running) return;
 		try {
+			const workspaceRead = process.env.WISA_BTW_WORKSPACE_READ === "1" && !isChatSession(this.#session.sessionManager);
 			const { replyText, assistantMessage } = await runBtwTurn(this.#session, {
 				question,
 				history,
 				inject: running.inject,
+				workspaceRead,
 				conversationKey,
 				signal: running.abort.signal,
 				onTextDelta: delta => {

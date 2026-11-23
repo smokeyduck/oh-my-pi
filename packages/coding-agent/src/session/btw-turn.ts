@@ -3,6 +3,7 @@
  * record bookkeeping for a new topic or follow-up, and the ephemeral model turn.
  */
 import type { AssistantMessage, ImageContent, Message } from "@oh-my-pi/pi-ai";
+import { requiresNativeTools } from "@oh-my-pi/pi-catalog/compat/tools";
 import { prompt, Snowflake } from "@oh-my-pi/pi-utils";
 import btwUserPrompt from "../prompts/system/btw-user.md" with { type: "text" };
 import type { AgentSession } from "./agent-session";
@@ -66,6 +67,7 @@ export function runBtwTurn(
 		history?: readonly BtwHistoryTurn[];
 		/** Ask for steering prompts in an `<inject>` block (the `btw.inject` setting). */
 		inject?: boolean;
+		workspaceRead?: boolean;
 		conversationKey: string;
 		onTextDelta: (delta: string) => void;
 		signal: AbortSignal;
@@ -73,12 +75,15 @@ export function runBtwTurn(
 ): Promise<{ replyText: string; assistantMessage: AssistantMessage }> {
 	const model = session.model;
 	if (!model) throw new Error("No active model available for /btw.");
+	const workspaceRead = args.workspaceRead === true && model.supportsTools !== false && !requiresNativeTools(model);
 	const history: Message[] = [];
+	const renderQuestion = (question: string) =>
+		prompt.render(btwUserPrompt, { question, inject: args.inject, workspaceRead });
 	for (const turn of args.history ?? []) {
 		history.push({
 			role: "user",
 			content: [
-				{ type: "text", text: prompt.render(btwUserPrompt, { question: turn.question, inject: args.inject }) },
+				{ type: "text", text: renderQuestion(turn.question) },
 				...(turn.images ?? []),
 			],
 			attribution: "agent",
@@ -106,10 +111,11 @@ export function runBtwTurn(
 		});
 	}
 	return session.runEphemeralTurn({
-		promptText: prompt.render(btwUserPrompt, { question: args.question, inject: args.inject }),
+		promptText: renderQuestion(args.question),
 		promptImages: args.images,
 		history,
-		conversationKey: args.conversationKey,
+		conversationKey: workspaceRead ? undefined : args.conversationKey,
+		workspaceRead,
 		// /btw answers are read in full and saved to history: keep the
 		// repeated-line collapse, but not the 4 KiB cap meant for one-liners.
 		replyMaxBytes: Number.POSITIVE_INFINITY,

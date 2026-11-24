@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
+import { REJECTED_IMAGE_NOTE, UNSUPPORTED_IMAGE_NOTE } from "@oh-my-pi/pi-ai/providers/image-recovery";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -7,7 +9,7 @@ import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
-const PNG_1X1 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+const PNG_1X1 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M8AAAMBAQDJ/pLvAAAAAElFTkSuQmCC";
 
 function sseDone(): Response {
 	const chunk = {
@@ -24,7 +26,7 @@ function sseDone(): Response {
 	});
 }
 
-describe("session image replacement on a wire that strips images", () => {
+describe("session image recovery", () => {
 	const sessions: Array<{ dispose(): Promise<void> }> = [];
 
 	afterEach(async () => {
@@ -32,14 +34,34 @@ describe("session image replacement on a wire that strips images", () => {
 		vi.restoreAllMocks();
 	});
 
-	it("replaces history images with text before the provider transforms run", async () => {
+	it.each([
+		["declared image input that the wire strips", true],
+		["a provider media-format rejection", false],
+	] as const)("keeps prompting after %s", async (_case, knownTextOnly) => {
 		using tempDir = TempDir.createSync("@pi-wire-stripped-images-");
 		// Declares image input; `compat.stripImageInput` drops images on the wire.
-		const model = getBundledModel("fireworks", "deepseek-v4-flash");
+		const model = knownTextOnly
+			? getBundledModel("fireworks", "deepseek-v4-flash")
+			: buildModel({
+					id: "sdk-image-recovery",
+					name: "SDK image recovery test model",
+					api: "openai-completions",
+					provider: "fireworks",
+					baseUrl: "https://provider.example.test/v1",
+					reasoning: false,
+					input: ["text", "image"],
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+					contextWindow: 128_000,
+					maxTokens: 4096,
+				});
 		const bodies: string[] = [];
 		const fetchStub = Object.assign(
 			async (_input: string | URL | Request, init?: RequestInit | BunFetchRequestInit) => {
-				bodies.push(String(init?.body ?? ""));
+				const body = String(init?.body ?? "");
+				bodies.push(body);
+				if (!knownTextOnly && body.includes(PNG_1X1)) {
+					return Response.json({ error: { message: "Unsupported media format" } }, { status: 400 });
+				}
 				return sseDone();
 			},
 			{ preconnect: globalThis.fetch.preconnect },
@@ -79,11 +101,14 @@ describe("session image replacement on a wire that strips images", () => {
 
 		await session.sendUserMessage("next");
 
-		const request = bodies.find(body => body.includes("earlier screenshot"));
-		expect(request).toBeDefined();
-		// The session's own text-only replacement ran, not the wire's last-resort strip.
-		expect(request).toContain("[image omitted: the active model does not support image input]");
-		expect(request).not.toContain("model does not support vision");
+		const requests = bodies.filter(body => body.includes("earlier screenshot"));
+		expect(requests).toHaveLength(knownTextOnly ? 1 : 2);
+		if (!knownTextOnly) expect(requests[0]).toContain(PNG_1X1);
+		// The session's own text replacement ran, not the wire's last-resort strip.
+		const request = requests.at(-1);
+		expect(request).toContain(knownTextOnly ? UNSUPPORTED_IMAGE_NOTE : REJECTED_IMAGE_NOTE);
 		expect(request).not.toContain(PNG_1X1);
+		expect(JSON.stringify(sessionManager.buildSessionContext().messages)).toContain(PNG_1X1);
+		expect(session.agent.state.messages.at(-1)).toMatchObject({ role: "assistant", stopReason: "stop" });
 	});
 });

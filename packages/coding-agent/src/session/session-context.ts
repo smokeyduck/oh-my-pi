@@ -181,6 +181,8 @@ export interface BuildSessionContextOptions {
 	transcript?: boolean;
 	/** In transcript mode, elide entries replaced by the latest compaction. */
 	collapseCompactedHistory?: boolean;
+	/** In a full transcript projection, start at the latest compaction divider. */
+	transcriptFromLatestCompaction?: boolean;
 	/**
 	 * Tool calls the live agent loop is still executing. They count as paired, so a
 	 * mid-turn rebuild keeps the in-flight assistant turn; the loop appends their results.
@@ -202,7 +204,8 @@ export interface BuildSessionContextOptions {
 }
 
 /** Options for `AgentSession.buildTranscriptSessionContext` (via `SessionProviderBoundary`). */
-export interface TranscriptSessionContextOptions extends Pick<BuildSessionContextOptions, "collapseCompactedHistory"> {
+export interface TranscriptSessionContextOptions
+	extends Pick<BuildSessionContextOptions, "collapseCompactedHistory" | "transcriptFromLatestCompaction"> {
 	/**
 	 * Keep the unpaired tool calls of the turn the agent loop is still executing,
 	 * so a mid-turn rebuild keeps them routable. Calls left unpaired by earlier
@@ -510,7 +513,8 @@ export function buildSessionContext(
 		// TUI) at the point it fired, with any snapcompact frames re-attached so
 		// the component can report them. An immediate frame-rescue replacement is
 		// the same compaction point and supersedes its source entry below.
-		for (let index = 0; index < path.length; index++) {
+		const start = options.transcriptFromLatestCompaction && compaction ? path.indexOf(compaction) : 0;
+		for (let index = start; index < path.length; index++) {
 			const entry = path[index];
 			handleEntryResetTracking(entry);
 			if (entry.type === "compaction") {

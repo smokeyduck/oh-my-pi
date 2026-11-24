@@ -240,6 +240,7 @@ import { buildRpcSessionTree } from "./rpc-session-tree";
 import { applyRpcManageSkill, buildRpcSkillDetail } from "./rpc-skills";
 import { RpcSubagentRegistry, readRpcSubagentTranscript, resolveOwnedLiveSubagent } from "./rpc-subagents";
 import { startRpcTan } from "./rpc-tan";
+import { pageRpcTranscriptArchive } from "./rpc-transcript-archive";
 import { type HostedComponentFactory, showHostedComponent } from "./rpc-custom-ui";
 import type {
 	RpcAbortAndRestoreQueueResult,
@@ -4188,9 +4189,8 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 			}
 
 			case "get_transcript": {
-				// Full display history (all messages on the active branch), NOT the
-				// LLM context window that get_messages returns.
-				const transcript = session.buildTranscriptSessionContext();
+				// This is display history, not the LLM context window that get_messages returns.
+				const transcript = session.buildTranscriptSessionContext({ transcriptFromLatestCompaction: command.folded });
 				return success(id, "get_transcript", {
 					messages: attachRpcTranscriptEntryIds(transcript.messages, transcript.messageEntryIds ?? []),
 				});
@@ -4595,11 +4595,14 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 			}
 
 			case "get_transcript_page": {
-				if (session.isStreaming || session.isCompacting)
+				if (session.isStreaming || session.isCompacting || (command.archive !== undefined && session.isBackgroundCompacting))
 					return error(id, "get_transcript_page", RPC_MESSAGES_PAGE_BUSY_ERROR, "session_busy");
-				const transcript = session.buildTranscriptSessionContext();
-				const messages = attachRpcTranscriptEntryIds(transcript.messages, transcript.messageEntryIds ?? []);
 				try {
+					if (command.archive !== undefined) {
+						return success(id, "get_transcript_page", await pageRpcTranscriptArchive(session, command.archive));
+					}
+					const transcript = session.buildTranscriptSessionContext({ transcriptFromLatestCompaction: command.folded });
+					const messages = attachRpcTranscriptEntryIds(transcript.messages, transcript.messageEntryIds ?? []);
 					return success(
 						id,
 						"get_transcript_page",
@@ -4935,6 +4938,17 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 				} catch (err: unknown) {
 					return error(id, "set_setting", err instanceof Error ? err.message : String(err));
 				}
+			}
+
+			case "set_session_compaction": {
+				session.setSessionCompactionSettings(command.sessionId, command.values);
+				output({
+					type: "config_update",
+					model: session.model,
+					thinkingLevel: session.thinkingLevel,
+					autoCompactionEnabled: session.autoCompactionEnabled,
+				});
+				return success(id, "set_session_compaction");
 			}
 
 			case "reset_settings": {

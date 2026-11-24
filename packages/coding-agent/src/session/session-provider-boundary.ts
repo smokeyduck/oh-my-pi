@@ -171,6 +171,7 @@ export class SessionProviderBoundary {
 			this.#host.sessionManager.buildSessionContext({
 				transcript: true,
 				collapseCompactedHistory: options?.collapseCompactedHistory,
+				transcriptFromLatestCompaction: options?.transcriptFromLatestCompaction,
 				inFlightToolCallIds: keepLive ? this.#host.runToolCallIds() : undefined,
 			}),
 			this.#host.obfuscator(),

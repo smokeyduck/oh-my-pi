@@ -34,9 +34,9 @@ import type { DiscoverAuthStorageOptions } from "@oh-my-pi/pi-ai/auth-broker/dis
 import type { Dialect } from "@oh-my-pi/pi-ai/dialect";
 import { anthropicHostRunsTool } from "@oh-my-pi/pi-ai/providers/anthropic";
 import { prewarmModelConnection } from "@oh-my-pi/pi-ai/providers/connection-prewarm";
+import { omitUnsupportedContextImages, replaceContextImages } from "@oh-my-pi/pi-ai/providers/image-recovery";
 import { isOpenAICodexWebSocketPreferred } from "@oh-my-pi/pi-ai/providers/openai-codex-transport";
 import { withCredentialRedaction } from "@oh-my-pi/pi-ai/providers/transform-messages";
-import { sendsImageInputOnWire } from "@oh-my-pi/pi-ai/providers/vision-guard";
 import { syncOpenAIResponsesHistoryTexts } from "@oh-my-pi/pi-ai/utils";
 import { FALLBACK_DIALECT, preferredDialect } from "@oh-my-pi/pi-catalog/identity";
 import type { Component } from "@oh-my-pi/pi-tui";
@@ -103,7 +103,7 @@ import { createBridgeEditTool, createBridgeGrepFactory } from "./cursor-bridge-t
 import { daemonMutex } from "./daemon/modules/mutex";
 import "./discovery";
 import { LiveImageUrlService } from "./blob-broker/service";
-import { wrapStreamFnWithBlobUrlFallback } from "./blob-broker/stream-fallback";
+import { wrapStreamFnWithBlobUrlFallback, wrapStreamFnWithImageRejectionFallback } from "./blob-broker/stream-fallback";
 import { initializeWithSettings } from "./discovery";
 import { setInvocationConfiguredExtensions, withOmpExtensionRootScope } from "./discovery/omp-extension-roots";
 import { disposeVmContextsByOwner } from "./eval/js/context-manager";
@@ -242,7 +242,6 @@ import {
 	type CustomMessage,
 	convertToLlm,
 	LSP_LATE_DIAGNOSTIC_MESSAGE_TYPE,
-	replaceLlmImagesWithText,
 	USER_INTERRUPT_LABEL,
 	wrapSteeringForModel,
 } from "./session/messages";
@@ -4898,33 +4897,16 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 
 		const slashCommands = await slashCommandsPromise;
 
-		// Keep image blocks off the wire when they'd be rejected: either the user
-		// disabled images (`images.blockImages`) or the active model's wire sends
-		// none. The latter covers switching from a vision model to a text-only
-		// one mid-session — historical image blocks would otherwise be replayed to
-		// a provider that 400s on them (#5400) — and routes that strip images,
-		// whose blocks would otherwise be normalized and published for nothing.
-		// Read both dynamically so a `/model` switch or setting change takes
-		// effect on the next turn.
-		const convertToLlmWithBlockImages = (messages: AgentMessage[]): Message[] => {
-			const converted = convertToLlm(messages);
-			if (cfgImagesBlockImages.get(settings)) {
-				return replaceLlmImagesWithText(converted, "Image reading is disabled.");
-			}
-			const activeModel = agent?.state.model ?? model;
-			if (activeModel && !sendsImageInputOnWire(activeModel)) {
-				return replaceLlmImagesWithText(
-					converted,
-					"[image omitted: the active model does not support image input]",
-				);
-			}
-			return converted;
-		};
+		// Capability is request-model-specific (including per-turn overrides and side requests).
+		const applyImagePolicy = (context: Context, requestModel: Model): Context =>
+			cfgImagesBlockImages.get(settings)
+				? replaceContextImages(context, "Image reading is disabled.")
+				: omitUnsupportedContextImages(context, requestModel);
 
 		// Final convertToLlm: live provider replay drops API-level refusal errors,
 		// then applies secret obfuscation to the remaining outbound context.
 		const convertToLlmFinal = (messages: AgentMessage[]): Message[] => {
-			const converted = filterProviderReplayMessages(convertToLlmWithBlockImages(messages));
+			const converted = filterProviderReplayMessages(convertToLlm(messages));
 			if (!obfuscator?.hasSecrets()) return converted;
 			return obfuscateMessages(obfuscator, converted);
 		};
@@ -4984,9 +4966,12 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			const dateCwdReminder = new DateCwdReminderInjector(journal);
 			return async (context: Context, transformModel: Model): Promise<Context> => {
 				let transformed = obfuscator ? obfuscateProviderContext(obfuscator, context) : context;
+				transformed = applyImagePolicy(transformed, transformModel);
 				// The archive was sized for the model active at the last context build; a model switch may have lowered the budget.
 				transformed = capArchiveFrameBytes(transformed, transformModel);
-				transformed = await snapcompactInline.transform(transformed, transformModel);
+				if (!cfgImagesBlockImages.get(settings)) {
+					transformed = await snapcompactInline.transform(transformed, transformModel);
+				}
 				transformed = clampProviderContextImages(transformed, transformModel);
 				transformed = await normalizeProviderContextImagesForModel(transformed, transformModel);
 				// After the model-specific normalizers: they carry better wording for the
@@ -5084,8 +5069,9 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			// Fallbacks, advisors and turn overrides must not turn a provisional catalog
 			// hypothesis into probe traffic or a reasoning control on the request.
 			const suppressUnverified = desktopThinking && !hasVerifiedThinkingControl(streamModel);
+			const outbound = applyImagePolicy(context, streamModel);
 			return withCredentialRedaction(cfgSecretsEnabled.get(settings), () =>
-				settingsBoundStreamFn(suppressUnverified ? withoutUnverifiedThinking(streamModel) : streamModel, context, {
+				settingsBoundStreamFn(suppressUnverified ? withoutUnverifiedThinking(streamModel) : streamModel, outbound, {
 					...streamOptions,
 					...(suppressUnverified
 						? {
@@ -5099,12 +5085,13 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				}),
 			);
 		};
+		const primaryImageRecoveryStreamFn = wrapStreamFnWithImageRejectionFallback(settingsAwareStreamFn);
 		// Primary-agent (and its auto-learn capture twin) provider options read per
 		// request, so `/settings` changes to budgets, Kimi format, or the Codex
 		// websocket policy reach the next call without a session recreate.
 		const primaryStreamFn: StreamFn = (streamModel, context, streamOptions) => {
 			const kimiApiFormat = cfgProvidersKimiApiFormat.get(settings);
-			return settingsAwareStreamFn(streamModel, context, {
+			return primaryImageRecoveryStreamFn(streamModel, context, {
 				...streamOptions,
 				thinkingBudgets: streamOptions?.thinkingBudgets ?? cfgThinkingBudgets.get(settings),
 				kimiApiFormat: streamOptions?.kimiApiFormat ?? (kimiApiFormat === "auto" ? undefined : kimiApiFormat),

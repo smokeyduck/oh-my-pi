@@ -4,6 +4,7 @@
 
 import type { Message, ToolCall } from "@oh-my-pi/pi-ai";
 import { type Dialect, getDialectDefinition } from "@oh-my-pi/pi-ai/dialect";
+import { replaceLlmImagesWithText } from "@oh-my-pi/pi-ai/providers/image-recovery";
 import { escapeHarmonyControlTokens } from "@oh-my-pi/pi-ai/utils/harmony-leak";
 import { prompt, stringifyJson } from "@oh-my-pi/pi-utils";
 import * as snapcompact from "@oh-my-pi/snapcompact";
@@ -155,7 +156,8 @@ export function escapeSummaryBoundaryTags(text: string): string {
  * `dropThinking` is the summarizer's resolved `classifier-cot-extraction` policy.
  */
 export function serializeConversationForSummary(messages: Message[], dialect?: Dialect, dropThinking = false): string {
-	const conversation = serializeConversation(messages, dialect, dropThinking);
+	const textHistory = replaceLlmImagesWithText(messages, "[image omitted: this summary uses text-only history]");
+	const conversation = serializeConversation(textHistory, dialect, dropThinking);
 	const escaped = dialect === "harmony" ? escapeHarmonyControlTokens(conversation) : conversation;
 	return escapeSummaryBoundaryTags(escaped);
 }

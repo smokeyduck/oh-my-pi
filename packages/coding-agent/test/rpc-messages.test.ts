@@ -120,4 +120,12 @@ describe("RPC message pagination", () => {
 		expect(first.messages).toEqual([messages[0]]);
 		expect(first.nextCursor).toBeDefined();
 	});
+
+	it("keeps archive previews within the byte budget even when the nearest row is oversized", () => {
+		const messages = [message(0, MAX_RPC_FRAME_BYTES + 1), message(1, 128)];
+		const page = pageRpcMessages(messages, { ...snapshot, messageCount: messages.length }, { strictByteLimit: true });
+		expect(page.messages).toEqual([messages[1]]);
+		expect(page.totalMessages).toBe(2);
+		expect(page.nextCursor).toBeUndefined();
+	});
 });

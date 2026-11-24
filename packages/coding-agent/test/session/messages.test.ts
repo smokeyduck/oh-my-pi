@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { type AgentMessage, filterProviderReplayMessages } from "@oh-my-pi/pi-agent-core";
-import type { AssistantMessage, ImageContent } from "@oh-my-pi/pi-ai";
+import type { AssistantMessage, ImageContent, Message } from "@oh-my-pi/pi-ai";
+import { replaceLlmImagesWithText } from "@oh-my-pi/pi-ai/providers/image-recovery";
 import { COLLAB_PROMPT_MESSAGE_TYPE } from "@oh-my-pi/pi-wire";
 import {
 	buildReplanTitleContext,
@@ -11,7 +12,6 @@ import {
 	dedupeEphemeralReply,
 	INTERRUPTED_THINKING_MESSAGE_TYPE,
 	operatorTitleText,
-	replaceLlmImagesWithText,
 	SKILL_PROMPT_MESSAGE_TYPE,
 	type SkillPromptDetails,
 	stripImagesFromMessage,
@@ -429,6 +429,51 @@ describe("replaceLlmImagesWithText", () => {
 		const scrubbed = replaceLlmImagesWithText(converted, "[image omitted]");
 		const user = scrubbed.find(m => m.role === "user");
 		expect(Array.isArray(user?.content) && user.content).toEqual([{ type: "text", text: "[image omitted]" }]);
+	});
+
+	it("rewrites native image and screenshot parts without discarding replay state", () => {
+		const compaction = { type: "compaction", encrypted_content: "opaque" };
+		const user: Message = {
+			role: "user",
+			content: "old request",
+			providerPayload: {
+				type: "openaiResponsesHistory",
+				items: [
+					compaction,
+					{ type: "message", role: "user", content: [{ type: "input_image", file_id: "file-1" }] },
+					{
+						type: "function_call_output",
+						call_id: "call-1",
+						output: [{ type: "input_image", image_url: "image-url" }],
+					},
+					{
+						type: "computer_call_output",
+						call_id: "call-2",
+						output: { type: "computer_screenshot", file_id: "file-2" },
+					},
+				],
+			},
+			timestamp: 0,
+		};
+		const original = structuredClone(user);
+		const [scrubbed] = replaceLlmImagesWithText([user], "[image omitted]");
+		expect(scrubbed).toMatchObject({
+			content: "old request\n[image omitted]",
+			providerPayload: {
+				items: [
+					compaction,
+					{ type: "message", role: "user", content: [{ type: "input_text", text: "[image omitted]" }] },
+					{
+						type: "function_call_output",
+						call_id: "call-1",
+						output: [{ type: "input_text", text: "[image omitted]" }],
+					},
+					{ type: "computer_call_output", call_id: "call-2", error: "[image omitted]" },
+				],
+			},
+		});
+		expect(JSON.stringify(scrubbed)).not.toContain("file-");
+		expect(user).toEqual(original);
 	});
 });
 

@@ -24,6 +24,10 @@ import {
 	supportsAnthropicCompaction,
 	supportsBedrockConverseCompaction,
 } from "@oh-my-pi/pi-ai/providers/anthropic-compaction";
+import {
+	completeWithImageRejectionFallback,
+	omitUnsupportedContextImages,
+} from "@oh-my-pi/pi-ai/providers/image-recovery";
 import { isRecord, prompt } from "@oh-my-pi/pi-utils";
 import { type InstrumentedChatSpanOptions, instrumentedCompleteSimple } from "../telemetry";
 import type { AgentMessage } from "../types";
@@ -274,29 +278,32 @@ export async function requestAnthropicNativeCompaction(
 				request.reasoning,
 			)
 		: request.reasoning;
-	const response = await instrumentedCompleteSimple(
-		model,
-		request.context,
-		{
-			apiKey,
-			signal,
-			maxTokens: request.maxTokens,
-			reasoning,
-			initiatorOverride: options.initiatorOverride,
-			metadata: options.metadata,
-			fetch: options.fetch,
-			sessionId: options.sessionId,
-			promptCacheKey: options.promptCacheKey,
-			providerSessionState: options.providerSessionState,
-			maxInFlightRequests: options.maxInFlightRequests,
-			anthropicCompaction: { instructions: request.instructions, filesDueBefore: request.filesDueBefore },
-		},
-		{
-			telemetry: options.telemetry,
-			oneshotKind: "compaction_native",
-			completeImpl: options.completeImpl,
-			retry: options.retry,
-		},
+	const context = omitUnsupportedContextImages(request.context, model);
+	const response = await completeWithImageRejectionFallback(context, signal, attemptContext =>
+		instrumentedCompleteSimple(
+			model,
+			attemptContext,
+			{
+				apiKey,
+				signal,
+				maxTokens: request.maxTokens,
+				reasoning,
+				initiatorOverride: options.initiatorOverride,
+				metadata: options.metadata,
+				fetch: options.fetch,
+				sessionId: options.sessionId,
+				promptCacheKey: options.promptCacheKey,
+				providerSessionState: options.providerSessionState,
+				maxInFlightRequests: options.maxInFlightRequests,
+				anthropicCompaction: { instructions: request.instructions, filesDueBefore: request.filesDueBefore },
+			},
+			{
+				telemetry: options.telemetry,
+				oneshotKind: "compaction_native",
+				completeImpl: options.completeImpl,
+				retry: options.retry,
+			},
+		),
 	);
 	if (response.stopReason === "aborted") {
 		throw new AIError.AbortError("Anthropic compaction aborted", { cause: signal?.reason });

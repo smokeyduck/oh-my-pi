@@ -9,6 +9,8 @@
 - Desktop RPC hosts can supply distinct Coding and Work tool profiles and select a Coding edit mode without rewriting global settings. Desktop sessions default to local memory and Auto-Learn unless explicitly configured otherwise.
 - Desktop Work profiles can expose native `computer` controls without enabling shell or general-purpose eval. Screen inspection and input use the existing desktop worker; input prompts for approval.
 - Desktop RPC hosts can reset global non-credential settings while retaining project settings and installed resources.
+- `set_session_compaction` stores compaction overrides in the addressed transcript rather than in global settings. WISA desktop defaults use a 20% threshold when no override is set.
+- Folded RPC transcript snapshots omit rows before the current compaction divider. An explicit archive request loads a bounded page for one of the previous three dividers without switching sessions.
 
 ### Fixed
 
@@ -18,6 +20,7 @@
 - Wisa discovery without a provider API uses Anthropic Messages for Claude, Responses for OpenAI models, and Chat Completions for other families. Explicit APIs and per-model overrides remain authoritative; other gateways are unchanged.
 - Wisa request API changes retain the existing discovery cache namespace; cached rosters are normalized to the selected API policy without losing models when discovery is unavailable.
 - Startup no-model warnings now clear after a model is successfully selected, including in RPC hosts, without dismissing unrelated configuration warnings.
+- Chat, handoff and compaction send text notices instead of unsupported images, or retry once without images after a recognized format rejection. Original session content stays intact.
 ## [19.1.1] - 2026-11-23
 
 ### Breaking Changes

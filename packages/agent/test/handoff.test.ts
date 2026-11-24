@@ -8,7 +8,7 @@ import {
 	generateHandoffFromContext,
 } from "@oh-my-pi/pi-agent-core/compaction";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core/thinking";
-import type { AssistantMessage, Model, ToolCall } from "@oh-my-pi/pi-ai";
+import type { AssistantMessage, Context, Model, ToolCall } from "@oh-my-pi/pi-ai";
 import * as ai from "@oh-my-pi/pi-ai";
 import { Effort } from "@oh-my-pi/pi-ai";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
@@ -256,6 +256,44 @@ describe("handoff helpers", () => {
 		});
 	});
 
+	test.each([
+		["known text-only", false, 1, "the active model does not support image input"],
+		["provider rejects media format", true, 2, "the provider rejected the image input or format"],
+	] as const)("handoff preserves history while omitting images: %s", async (_case, vision, attempts, note) => {
+		const model: Model = { ...getTestModel(), input: vision ? ["text", "image"] : ["text"] };
+		const context: Context = {
+			systemPrompt: ["live system prompt"],
+			messages: [
+				{
+					role: "user",
+					content: [
+						{ type: "text", text: "earlier screenshot" },
+						{ type: "image", mimeType: "image/png", data: "old-image" },
+					],
+					timestamp: 1,
+				},
+			],
+		};
+		const original = structuredClone(context);
+		const completeImpl = vi.fn(async (_model: Model, request: Context) => {
+			if (JSON.stringify(request).includes("old-image")) {
+				return createAssistantError(400, "Unsupported media format");
+			}
+			return createAssistantMessage([{ type: "text", text: "## Goal\nContinue" }]);
+		});
+
+		expect(
+			await generateHandoffFromContext(context, model, { streamOptions: { apiKey: "test-key" }, completeImpl }),
+		).toBe("## Goal\nContinue");
+		expect(completeImpl).toHaveBeenCalledTimes(attempts);
+		const finalRequest = completeImpl.mock.calls.at(-1)?.[1];
+		expect(finalRequest?.messages[0]?.content).toEqual([
+			{ type: "text", text: "earlier screenshot" },
+			{ type: "text", text: `[image omitted: ${note}]` },
+		]);
+		expect(context).toEqual(original);
+	});
+
 	test("generateHandoffFromContext surfaces unrelated provider 400 without retrying", async () => {
 		const completeSimpleSpy = vi
 			.spyOn(ai, "completeSimple")
@@ -265,7 +303,13 @@ describe("handoff helpers", () => {
 		const context = {
 			systemPrompt: ["Live system prompt"],
 			tools,
-			messages: [{ role: "user" as const, content: "prepare handoff", timestamp: 1 }],
+			messages: [
+				{
+					role: "user" as const,
+					content: [{ type: "image" as const, mimeType: "image/png", data: "old-image" }],
+					timestamp: 1,
+				},
+			],
 		};
 
 		const error = await generateHandoffFromContext(context, model, {

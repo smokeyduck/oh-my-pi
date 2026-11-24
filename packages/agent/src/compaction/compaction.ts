@@ -26,6 +26,14 @@ import {
 } from "@oh-my-pi/pi-ai";
 import type { Dialect } from "@oh-my-pi/pi-ai/dialect";
 import * as AIError from "@oh-my-pi/pi-ai/error";
+import {
+	completeWithImageRejectionFallback,
+	isImageInputRejection,
+	omitUnsupportedContextImages,
+	REJECTED_IMAGE_NOTE,
+	replaceResponsesInputImages,
+	UNSUPPORTED_IMAGE_NOTE,
+} from "@oh-my-pi/pi-ai/providers/image-recovery";
 import { createOpenAICodexCompactionRequestContext } from "@oh-my-pi/pi-ai/providers/openai-codex-compaction";
 import type { OpenAICodexCompactionBody } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
 import type { InputItem as CodexInputItem } from "@oh-my-pi/pi-ai/providers/openai-codex/request-transformer";
@@ -35,6 +43,7 @@ import {
 	resolveOpenAICompatPolicy,
 } from "@oh-my-pi/pi-ai/providers/openai-shared";
 import { isSurvivingAssistant } from "@oh-my-pi/pi-ai/providers/transform-messages";
+import { sendsImageInputOnWire } from "@oh-my-pi/pi-ai/providers/vision-guard";
 import { stripOpenAIResponsesOutputOnlyStatusesForReplay } from "@oh-my-pi/pi-ai/utils";
 import { resolveCatalogPolicy } from "@oh-my-pi/pi-catalog/compat/catalog-policy";
 import { calculateCost } from "@oh-my-pi/pi-catalog/models";
@@ -1220,6 +1229,7 @@ export async function generateHandoffFromContext(
 	model: Model,
 	options: HandoffFromContextOptions,
 ): Promise<string> {
+	context = omitUnsupportedContextImages(context, model);
 	const overrun = countContextOverrun(context, model, new Tokenizer(model));
 	if (overrun !== undefined) {
 		throw new Error(
@@ -1230,22 +1240,22 @@ export async function generateHandoffFromContext(
 	const requestOptions = {
 		...options.streamOptions,
 		reasoning: resolveCompactionEffort(model, options.thinkingLevel),
-		toolChoice: "none" as const,
 	};
-	let response = await instrumentedCompleteSimple(model, context, requestOptions, {
-		telemetry: options.telemetry,
-		oneshotKind: "handoff",
-		completeImpl: options.completeImpl,
-		retry: {},
+	const span = { telemetry: options.telemetry, oneshotKind: "handoff", completeImpl: options.completeImpl, retry: {} };
+	let toolChoice: "none" | "auto" = "none";
+	const response = await completeWithImageRejectionFallback(context, requestOptions.signal, async request => {
+		const first = await instrumentedCompleteSimple(model, request, { ...requestOptions, toolChoice }, span);
+		if (
+			toolChoice !== "none" ||
+			first.stopReason !== "error" ||
+			requestOptions.signal?.aborted ||
+			!shouldRetryHandoffWithAutoToolChoice(first)
+		) {
+			return first;
+		}
+		toolChoice = "auto";
+		return instrumentedCompleteSimple(model, request, { ...requestOptions, toolChoice }, span);
 	});
-	if (response.stopReason === "error" && shouldRetryHandoffWithAutoToolChoice(response)) {
-		response = await instrumentedCompleteSimple(
-			model,
-			context,
-			{ ...requestOptions, toolChoice: "auto" },
-			{ telemetry: options.telemetry, oneshotKind: "handoff", completeImpl: options.completeImpl, retry: {} },
-		);
-	}
 
 	if (response.stopReason === "error") {
 		throw createSummarizationError("Handoff generation failed", response);
@@ -1982,6 +1992,25 @@ export async function compact(
 			remoteReplayThroughEntryId = lastSummarizedEntryId;
 		}
 	};
+	// V1/V2 bypass the session stream. Strip their already-serialized replay so a
+	// native-only image or an image nested in a tool output cannot be sent again.
+	let responsesImageOmission = sendsImageInputOnWire(model) ? undefined : UNSUPPORTED_IMAGE_NOTE;
+	const sendResponsesCompaction = async (
+		input: Array<Record<string, unknown>>,
+		send: (input: Array<Record<string, unknown>>) => Promise<void>,
+	): Promise<void> => {
+		if (responsesImageOmission) return send(replaceResponsesInputImages(input, responsesImageOmission));
+		try {
+			await send(input);
+		} catch (error) {
+			if (signal?.aborted || !isImageInputRejection(error)) throw error;
+			const fallback = replaceResponsesInputImages(input, REJECTED_IMAGE_NOTE);
+			if (fallback === input) throw error;
+			// Share the one fallback across V2/V1 and whole-history/prefix attempts.
+			responsesImageOmission = REJECTED_IMAGE_NOTE;
+			await send(fallback);
+		}
+	};
 	if (
 		settings.remoteEnabled !== false &&
 		settings.remoteStreamingV2Enabled !== false &&
@@ -2108,6 +2137,7 @@ export async function compact(
 				sessionId: summaryOptions.sessionId,
 				promptCacheKey: summaryOptions.remotePromptCacheKey,
 				retainedMessageBudget: settings.v2RetainedMessageBudget,
+				// Retained items are local replay metadata; keep the original user items.
 				retainedUserItems,
 			};
 			const request = codexBody
@@ -2137,11 +2167,16 @@ export async function compact(
 		if (whole.remoteHistory.length > 0) {
 			try {
 				await sendRemoteCompaction(
-					() => sendV2(whole, !canCompactBeforeTail),
+					() =>
+						sendResponsesCompaction(whole.remoteHistory, remoteHistory =>
+							sendV2({ ...whole, remoteHistory }, !canCompactBeforeTail),
+						),
 					async () => {
 						const prefix = await buildV2Input(false);
 						if (prefix.remoteHistory.length === 0) return false;
-						await sendV2(prefix, true);
+						await sendResponsesCompaction(prefix.remoteHistory, remoteHistory =>
+							sendV2({ ...prefix, remoteHistory }, true),
+						);
 						return true;
 					},
 				);
@@ -2212,7 +2247,7 @@ export async function compact(
 		if (whole.length > 0) {
 			try {
 				await sendRemoteCompaction(
-					() => sendV1(whole, !canCompactBeforeTail),
+					() => sendResponsesCompaction(whole, input => sendV1(input, !canCompactBeforeTail)),
 					async () => {
 						const prefix = buildOpenAiNativeHistory(
 							convertToLlm(remotePrefixMessages),
@@ -2221,7 +2256,7 @@ export async function compact(
 							supportsOriginalDetail,
 						);
 						if (prefix.length === 0) return false;
-						await sendV1(prefix, true);
+						await sendResponsesCompaction(prefix, input => sendV1(input, true));
 						return true;
 					},
 				);

@@ -3870,8 +3870,10 @@ export class SessionManager {
 		return entry.id;
 	}
 
-	appendCustomEntry(customType: string, data?: unknown): string {
-		const entry: CustomEntry = { type: "custom", customType, data, ...this.#freshEntryFields() };
+	appendCustomEntry(customType: string, data?: unknown, options?: { preserveLeaf?: boolean }): string {
+		const fields = this.#freshEntryFields();
+		const entry: CustomEntry = { type: "custom", customType, data, ...fields };
+		if (options?.preserveLeaf) entry.activeLeafId = fields.parentId;
 		this.#recordEntry(entry);
 		return entry.id;
 	}
@@ -4159,6 +4161,13 @@ export class SessionManager {
 	/** All session entries (excludes header). Returns a shallow copy. */
 	getEntries(): SessionEntry[] {
 		return [...this.#entries];
+	}
+
+	/** Latest metadata entry of this type, regardless of the active conversation branch. */
+	findLastCustomEntry(customType: string): CustomEntry | undefined {
+		return this.#entries.findLast(
+			(entry): entry is CustomEntry => entry.type === "custom" && entry.customType === customType,
+		);
 	}
 
 	/** {@link conversationTip} of the session at its active leaf. */

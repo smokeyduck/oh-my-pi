@@ -5,7 +5,13 @@
  */
 
 import type { StreamFn } from "@oh-my-pi/pi-agent-core";
-import type { Context } from "@oh-my-pi/pi-ai";
+import type { AssistantMessageEvent, Context } from "@oh-my-pi/pi-ai";
+import {
+	contextHasInputImages,
+	isImageInputRejection,
+	REJECTED_IMAGE_NOTE,
+	replaceContextImages,
+} from "@oh-my-pi/pi-ai/providers/image-recovery";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { logger } from "@oh-my-pi/pi-utils";
 import { clampProviderContextImageBytes } from "../session/provider-image-budget";
@@ -87,6 +93,65 @@ export function wrapStreamFnWithBlobUrlFallback(
 		void run().catch(error => {
 			if (!outer.done) outer.fail(error);
 		});
+		return outer;
+	};
+}
+
+/** Recover a rejected live request once, after any broker source fallback. */
+export function wrapStreamFnWithImageRejectionFallback(base: StreamFn): StreamFn {
+	return (model, context, options) => {
+		if (options?.signal?.aborted || !contextHasInputImages(context)) return base(model, context, options);
+
+		const outer = new AssistantMessageEventStream();
+		const run = async (): Promise<void> => {
+			let start: Extract<AssistantMessageEvent, { type: "start" }> | undefined;
+			let emittedContent = false;
+			const pump = async (request: Context, allowFallback: boolean): Promise<boolean> => {
+				const inner = await base(model, request, options);
+				outer.forwardLocalWorkFrom(inner);
+				for await (const event of inner) {
+					if (event.type === "start" && !emittedContent && event.partial.content.length === 0) {
+						start = event;
+						continue;
+					}
+					if (
+						allowFallback &&
+						!emittedContent &&
+						!options?.signal?.aborted &&
+						event.type === "error" &&
+						isImageInputRejection(event.error)
+					) {
+						return true;
+					}
+					if (start) {
+						outer.push(start);
+						start = undefined;
+					}
+					emittedContent = true;
+					outer.push(event);
+				}
+				if (!outer.done) {
+					const result = await inner.result();
+					if (allowFallback && !emittedContent && !options?.signal?.aborted && isImageInputRejection(result)) {
+						return true;
+					}
+					if (start) outer.push(start);
+					outer.end(result);
+				}
+				return false;
+			};
+
+			try {
+				if (!(await pump(context, true))) return;
+			} catch (error) {
+				if (emittedContent || options?.signal?.aborted || !isImageInputRejection(error)) throw error;
+			}
+			start = undefined;
+			await pump(replaceContextImages(context, REJECTED_IMAGE_NOTE), false);
+		};
+		void run()
+			.catch(error => outer.fail(error))
+			.finally(() => outer.forwardLocalWorkFrom(undefined));
 		return outer;
 	};
 }

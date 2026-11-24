@@ -45,6 +45,8 @@ interface RpcMessageCursorPayload extends RpcMessageSnapshot {
 export interface RpcMessagesPageOptions {
 	cursor?: string;
 	limit?: number;
+	/** Preview pages may omit individually oversized rows rather than exceed the byte budget. */
+	strictByteLimit?: boolean;
 }
 
 /** Attach persisted tree node ids to committed conversation messages on the RPC wire. */
@@ -153,7 +155,13 @@ export function pageRpcMessages(
 	while (offset + page.length < messages.length && page.length < limit) {
 		const message = messages[offset + page.length];
 		const messageBytes = Buffer.byteLength(JSON.stringify(message), "utf8") + (page.length === 0 ? 0 : 1);
-		if (page.length > 0 && pageBytes + messageBytes > MAX_RPC_MESSAGE_PAGE_BYTES) break;
+		if (pageBytes + messageBytes > MAX_RPC_MESSAGE_PAGE_BYTES) {
+			if (page.length > 0) break;
+			if (options.strictByteLimit) {
+				offset++;
+				continue;
+			}
+		}
 		page.push(message);
 		pageBytes += messageBytes;
 	}

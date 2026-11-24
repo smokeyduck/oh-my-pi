@@ -504,6 +504,7 @@ import {
 	SessionAdvisors,
 	type SessionAdvisorsHost,
 } from "./session-advisors";
+import { SessionCompactionSettings } from "./session-compaction-settings";
 import type { SessionContext, TranscriptSessionContextOptions } from "./session-context";
 import { buildSessionContext, getRestorableSessionModels, isTranscriptEntry } from "./session-context";
 import {
@@ -1574,6 +1575,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	#sessionTransitionSettled: Promise<void> | undefined;
 	#resolveSessionTransition: (() => void) | undefined;
 	#sessionTransitionDepth = 0;
+	readonly #sessionCompactionSettings: SessionCompactionSettings;
 	/** Root of this session's transition tree: transitions requested from outside any running one queue on it. */
 	readonly #sessionTransitionRoot: SessionTransitionTurn = {
 		parent: undefined,
@@ -2350,6 +2352,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			}
 		}
 		this.settings = config.settings;
+		this.#sessionCompactionSettings = new SessionCompactionSettings(this.sessionManager, this.settings);
 		this.restrictToolNames = config.restrictToolNames === true;
 		this.#ownsCostGate = config.costGate === undefined;
 		this.#costGate = config.costGate ?? this.#createCostGate();
@@ -7139,6 +7142,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	 * needing to re-call `#syncAgentSessionId()` on every such event.
 	 */
 	#syncAgentSessionId(sessionId?: string, notifyChange = true): void {
+		this.#sessionCompactionSettings.restore();
 		const currentSessionId = this.sessionManager.getSessionId();
 		if (this.#observedSessionId === undefined) {
 			this.#observedSessionId = currentSessionId;
@@ -8797,6 +8801,12 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	/** Current interrupt mode */
 	get interruptMode(): "immediate" | "wait" {
 		return this.agent.getInterruptMode();
+	}
+
+	/** Override compaction only for the addressed conversation. */
+	setSessionCompactionSettings(sessionId: string, values: unknown): void {
+		if (this.isSessionTransitioning || sessionId !== this.sessionId) throw new Error("The session changed");
+		this.#sessionCompactionSettings.patch(values);
 	}
 
 	/** Current session file path, or undefined if sessions are disabled */

@@ -158,7 +158,7 @@ export const cfgCompactionMethodOrder = register({
 export const cfgCompactionThresholdPercent = register({
 	id: "compaction.thresholdPercent",
 	type: "number",
-	default: -1,
+	default: process.env.WISA_STUDIO_DEFAULTS === "1" ? 20 : -1,
 	ui: {
 		tab: "context",
 		group: "Compaction",

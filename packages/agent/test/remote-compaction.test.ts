@@ -2650,6 +2650,54 @@ describe("compact() remote compaction failure handling", () => {
 		};
 	}
 
+	test.each([false, true])("recovers a native media rejection without modifying history (V2: %s)", async v2 => {
+		const preparation = makePreparation();
+		preparation.settings = { ...preparation.settings, remoteStreamingV2Enabled: v2 };
+		preparation.messagesToSummarize = [
+			{
+				role: "user",
+				content: [
+					{ type: "text", text: "old screenshot" },
+					{ type: "image", mimeType: "image/png", data: "aW1hZ2U=" },
+				],
+				timestamp: 1,
+			},
+		];
+		const original = structuredClone(preparation.messagesToSummarize);
+		const model = makeOpenAiModel({
+			input: ["text", "image"],
+			remoteCompaction: { enabled: true, v2StreamingEnabled: v2 },
+		});
+		const bodies: string[] = [];
+		const fetch: FetchImpl = async (_input, init) => {
+			const body = String(init?.body);
+			bodies.push(body);
+			if (body.includes("input_image")) {
+				return Response.json(
+					{ error: { code: "invalid_image_format", message: "Unsupported image format" } },
+					{ status: 400 },
+				);
+			}
+			const output = [{ type: "compaction", encrypted_content: "enc-recovered" }];
+			return v2
+				? sseResponse([
+						{ type: "response.output_item.done", output_index: 0, item: output[0] },
+						{ type: "response.completed", response: { id: "resp_recovered" } },
+					])
+				: Response.json({ output });
+		};
+
+		const result = await compact(preparation, model, "test-key", undefined, undefined, { fetch });
+
+		expect(result.shortSummary).toBe("Remote compaction");
+		expect(bodies).toHaveLength(2);
+		expect(bodies[0]).toContain("input_image");
+		expect(bodies[1]).not.toContain("input_image");
+		expect(bodies[1]).toContain("[image omitted: the provider rejected the image input or format]");
+		expect(bodies[1]).toContain("old screenshot");
+		expect(preparation.messagesToSummarize).toEqual(original);
+	});
+
 	test("V1 compact drops mixed-provider Anthropic state and keeps unrelated preserve data", async () => {
 		const compactionItem = { type: "compaction", encrypted_content: "enc-current-v1" };
 		const compactPaths: string[] = [];

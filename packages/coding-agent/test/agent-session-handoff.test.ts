@@ -29,6 +29,7 @@ import {
 	cfgCompactionThresholdPercent,
 	cfgContextPromotionEnabled,
 } from "@oh-my-pi/pi-coding-agent/session/context-settings";
+import { pageRpcTranscriptArchive } from "../src/modes/rpc/rpc-transcript-archive";
 
 const HANDOFF_SECRET = "HANDOFF_SECRET_TOKEN_12345";
 const HANDOFF_ARTIFACTS = new Bun.Glob("**/handoff-*.md");
@@ -169,6 +170,122 @@ describe("AgentSession handoff", () => {
 		expect(session.agent.state.messages.some(message => message.role === "compactionSummary")).toBe(true);
 		expect(events.filter(event => event.type === "auto_compaction_start")).toHaveLength(0);
 		expect(events.filter(event => event.type === "auto_compaction_end")).toHaveLength(0);
+	});
+
+	it("pages real compact and handoff boundaries without changing the active identity or journal", async () => {
+		const id = session.sessionId;
+		const file = session.sessionFile!;
+		const append = (content: string) =>
+			sessionManager.appendMessage({ role: "user", content, timestamp: Date.now() });
+		const oldIds = Array.from({ length: 60 }, (_, index) => append(`old prompt ${index}`));
+		vi.spyOn(compactionModule, "compact").mockImplementation(async preparation => ({
+			summary: "soft summary",
+			shortSummary: undefined,
+			firstKeptEntryId: preparation.firstKeptEntryId,
+			tokensBefore: preparation.tokensBefore,
+			details: {},
+		}));
+		cfgCompactionMethodOrder.set(session.settings, ["soft"]);
+		await session.compact();
+		await drainMaintenance();
+		const compactId = sessionManager.getBranchView().findLast(entry => entry.type === "compaction")!.id;
+		const compactPage = await pageRpcTranscriptArchive(session, { sessionId: id, boundaryId: compactId, depth: 0 });
+		expect(compactPage).toMatchObject({ hasOlder: false, totalMessages: 62 });
+		expect(compactPage.messages).toHaveLength(48);
+		const betweenId = append("between compact and handoff");
+		vi.spyOn(compactionModule, "generateHandoffFromContext").mockResolvedValue("## Goal\nContinue from here");
+		await session.compact(undefined, { mode: "handoff" });
+		await drainMaintenance();
+		const handoffId = sessionManager.getBranchView().findLast(entry => entry.type === "compaction")!.id;
+		const liveId = append("after both boundaries");
+		await sessionManager.flush();
+		const bytesBefore = await Bun.file(file).text();
+		const branchBefore = sessionManager.getBranch();
+		const liveMessages = session.messages;
+		const request = { sessionId: id, boundaryId: handoffId };
+
+		expect(handoffId).not.toBe(compactId);
+		expect(session.buildTranscriptSessionContext({ transcriptFromLatestCompaction: true }).messageEntryIds).toContain(
+			liveId,
+		);
+		expect(session.buildTranscriptSessionContext({ transcriptFromLatestCompaction: true }).messageEntryIds?.[0]).toBe(
+			handoffId,
+		);
+		const newest = await pageRpcTranscriptArchive(session, { ...request, depth: 0 });
+		expect(newest.hasOlder).toBe(true);
+		expect(newest.messages).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ entryId: compactId, role: "compactionSummary", method: "soft" }),
+				expect.objectContaining({ entryId: betweenId }),
+			]),
+		);
+		const oldest = await pageRpcTranscriptArchive(session, { ...request, depth: 1 });
+		expect(oldest).toMatchObject({ hasOlder: false, totalMessages: 62 });
+		expect(oldest.messages).toHaveLength(48);
+		expect(oldest.messages[0]).toMatchObject({ entryId: oldIds.at(-48) });
+		expect(oldest.messages.at(-1)).toMatchObject({ entryId: oldIds.at(-1) });
+		const hit = await pageRpcTranscriptArchive(session, { ...request, depth: 0, targetEntryId: oldIds[0] });
+		expect(hit.messages[0]).toMatchObject({ entryId: oldIds[0] });
+		await expect(pageRpcTranscriptArchive(session, { ...request, depth: 3 })).rejects.toThrow("archive depth");
+		await expect(pageRpcTranscriptArchive(session, { ...request, sessionId: "different", depth: 0 })).rejects.toThrow(
+			"stale",
+		);
+		await expect(pageRpcTranscriptArchive(session, { ...request, boundaryId: compactId, depth: 0 })).rejects.toThrow(
+			"stale",
+		);
+		expect(session.sessionId).toBe(id);
+		expect(session.sessionFile).toBe(file);
+		expect(session.messages).toBe(liveMessages);
+		expect(sessionManager.getBranch()).toEqual(branchBefore);
+		expect(await Bun.file(file).text()).toBe(bytesBefore);
+	});
+
+	it.each(["id", "path"] as const)(
+		"reads legacy handoff parent lineage by %s without switching the live session",
+		async reference => {
+			const parent = reference === "id" ? session.sessionId : session.sessionFile!;
+			await sessionManager.flush();
+			await session.newSession({ parentSession: parent });
+			const markerId = sessionManager.appendMessage({
+				role: "custom",
+				customType: "handoff",
+				content: "Start from this handoff",
+				display: true,
+				timestamp: Date.now(),
+			});
+			const childId = session.sessionId;
+			const childFile = session.sessionFile;
+			const page = await pageRpcTranscriptArchive(session, { sessionId: childId, boundaryId: markerId, depth: 0 });
+			expect(page).toMatchObject({ hasOlder: false, totalMessages: 2 });
+			expect(page.messages[0]).toMatchObject({ role: "user", content: [{ type: "text", text: "seed" }] });
+			expect(session.sessionId).toBe(childId);
+			expect(session.sessionFile).toBe(childFile);
+			expect(sessionManager.getLeafId()).toBe(markerId);
+		},
+	);
+
+	it("does not follow a legacy handoff link outside session directories", async () => {
+		const otherDir = TempDir.createSync("@pi-unlisted-session-");
+		try {
+			const other = SessionManager.create(otherDir.path(), otherDir.path());
+			const foreignFile = other.getSessionFile()!;
+			other.appendMessage({ role: "user", content: "Unlisted transcript", timestamp: Date.now() });
+			await other.ensureOnDisk();
+			await other.close();
+			expect(await Bun.file(foreignFile).exists()).toBe(true);
+			await session.newSession({ parentSession: foreignFile });
+			const boundaryId = sessionManager.appendMessage({
+				role: "custom",
+				customType: "handoff",
+				content: "Unlisted source",
+				display: true,
+				timestamp: Date.now(),
+			});
+			const page = await pageRpcTranscriptArchive(session, { sessionId: session.sessionId, boundaryId, depth: 0 });
+			expect(page).toEqual({ messages: [], hasOlder: false, totalMessages: 0 });
+		} finally {
+			await otherDir.remove();
+		}
 	});
 
 	it("applies the handoff before the next tool-loop request without losing its result or queued input", async () => {

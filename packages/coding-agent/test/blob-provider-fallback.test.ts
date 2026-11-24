@@ -2,11 +2,15 @@ import { describe, expect, it } from "bun:test";
 import type { StreamFn } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, Context, Model } from "@oh-my-pi/pi-ai";
 import { reachesBudgetedHost } from "@oh-my-pi/pi-ai";
+import { REJECTED_IMAGE_NOTE } from "@oh-my-pi/pi-ai/providers/image-recovery";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { resolveInlineImageByteBudget } from "@oh-my-pi/pi-catalog/compat/request-size";
 import { ImageUrlService } from "@oh-my-pi/pi-coding-agent/blob-broker/service";
-import { wrapStreamFnWithBlobUrlFallback } from "@oh-my-pi/pi-coding-agent/blob-broker/stream-fallback";
+import {
+	wrapStreamFnWithBlobUrlFallback,
+	wrapStreamFnWithImageRejectionFallback,
+} from "@oh-my-pi/pi-coding-agent/blob-broker/stream-fallback";
 
 const model: Model = buildModel({
 	id: "gpt-4.1",
@@ -206,5 +210,54 @@ describe("provider-file stream fallback", () => {
 		expect(calls).toEqual(["native"]);
 		expect(service.fallbacks).toEqual([]);
 		expect(events).toEqual(["start", "text_start", "text_delta", "error"]);
+	});
+});
+
+describe("image input rejection fallback", () => {
+	it.each([
+		{ name: "image error", detail: "Unsupported image format", retry: true },
+		{ name: "media error", detail: "Unsupported media format", retry: true },
+		{
+			name: "rejection on the image-free attempt",
+			detail: "Unsupported image format",
+			retry: true,
+			stillRejects: true,
+		},
+		{ name: "unrelated error", detail: "Unsupported tool schema", retry: false },
+		{ name: "image error after content", detail: "Unsupported image format", retry: false, content: true },
+		{ name: "image error after cancellation", detail: "Unsupported image format", retry: false, cancel: true },
+	])("handles $name without mutating replay history", async ({ detail, retry, content, cancel, stillRejects }) => {
+		const context = imageContext("inline");
+		const original = structuredClone(context);
+		const attempts: Context[] = [];
+		const controller = new AbortController();
+		const base: StreamFn = (_model, request) => {
+			attempts.push(request);
+			const stream = new AssistantMessageEventStream();
+			stream.push({ type: "start", partial: { ...message(""), content: [] } });
+			if (attempts.length > 1 && !stillRejects) {
+				stream.push({ type: "done", reason: "stop", message: message("ok") });
+				return stream;
+			}
+			if (content)
+				stream.push({ type: "text_delta", contentIndex: 0, delta: "partial", partial: message("partial") });
+			if (cancel) controller.abort();
+			stream.push({
+				type: "error",
+				reason: "error",
+				error: { ...message("", "error"), content: [], errorStatus: 400, errorMessage: detail },
+			});
+			return stream;
+		};
+
+		const stream = await wrapStreamFnWithImageRejectionFallback(base)(model, context, { signal: controller.signal });
+		expect(await eventTypes(stream)).toEqual([
+			"start",
+			...(content ? ["text_delta"] : []),
+			retry && !stillRejects ? "done" : "error",
+		]);
+		expect(attempts).toHaveLength(retry ? 2 : 1);
+		if (retry) expect(attempts[1]?.messages[0]?.content).toEqual([{ type: "text", text: REJECTED_IMAGE_NOTE }]);
+		expect(context).toEqual(original);
 	});
 });

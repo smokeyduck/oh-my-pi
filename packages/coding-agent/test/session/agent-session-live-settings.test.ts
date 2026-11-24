@@ -19,7 +19,12 @@ import {
 	cfgTopP,
 } from "@oh-my-pi/pi-coding-agent/session/settings";
 import { cfgTtsrEnabled } from "@oh-my-pi/pi-coding-agent/export/ttsr-settings";
-import { cfgToolsFormat } from "@oh-my-pi/pi-coding-agent/session/context-settings";
+import {
+	cfgCompactionEnabled,
+	cfgCompactionMethodOrder,
+	cfgCompactionThresholdPercent,
+	cfgToolsFormat,
+} from "@oh-my-pi/pi-coding-agent/session/context-settings";
 import { cfgInterruptMode } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import { cfgSteeringMode } from "@oh-my-pi/pi-coding-agent/modes/settings";
 
@@ -49,11 +54,10 @@ describe("AgentSession live settings", () => {
 
 	const start = async (
 		settings: Settings,
-		extra?: Pick<CreateAgentSessionOptions, "systemPrompt">,
+		extra?: Pick<CreateAgentSessionOptions, "systemPrompt" | "sessionManager">,
 	): Promise<AgentSession> => {
-		const cwd = path.join(os.tmpdir(), `pi-live-settings-${Snowflake.next()}`);
-		tempDirs.push(cwd);
-		fs.mkdirSync(cwd, { recursive: true });
+		const cwd = extra?.sessionManager?.getCwd() ?? fs.mkdtempSync(path.join(os.tmpdir(), "pi-live-settings-"));
+		if (!extra?.sessionManager) tempDirs.push(cwd);
 		const created = await createAgentSession({
 			cwd,
 			agentDir: cwd,
@@ -148,5 +152,41 @@ describe("AgentSession live settings", () => {
 		expect(builds).toBe(1);
 		expect(live.systemPrompt.join("\n")).not.toBe(before);
 		expect(live.systemPrompt.join("\n")).toContain("live-settings-tree-marker/");
+	});
+
+	it("restores compaction preferences only in the transcript that owns them", async () => {
+		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-session-compaction-"));
+		tempDirs.push(cwd);
+		const dir = path.join(cwd, "sessions");
+		const manager = SessionManager.create(cwd, dir);
+		const settings = Settings.isolated();
+		cfgCompactionThresholdPercent.set(settings, 20);
+		const normalOrder = cfgCompactionMethodOrder.get(settings);
+		const live = await start(settings, { sessionManager: manager });
+		const first = live.sessionId;
+		const file = live.sessionFile!;
+		live.setSessionCompactionSettings(first, {
+			"compaction.thresholdPercent": -1,
+			"compaction.methodOrder": ["shake", "soft"],
+			"compaction.enabled": false,
+		});
+		expect(cfgCompactionThresholdPercent.get(settings)).toBe(-1);
+		expect(settings.getProvenanceDetails(cfgCompactionThresholdPercent).globalValue).toBe(20);
+		await manager.ensureOnDisk();
+
+		expect(await live.newSession()).toBe(true);
+		expect(cfgCompactionThresholdPercent.get(settings)).toBe(20);
+		expect(cfgCompactionMethodOrder.get(settings)).toEqual(normalOrder);
+		expect(() => live.setSessionCompactionSettings(first, { "compaction.thresholdPercent": 80 })).toThrow();
+		expect(await live.switchSession(file, { keepModel: true })).toBe(true);
+		expect(cfgCompactionThresholdPercent.get(settings)).toBe(-1);
+
+		await live.dispose();
+		session = undefined;
+		const reopenedSettings = Settings.isolated();
+		await start(reopenedSettings, { sessionManager: await SessionManager.open(file, dir) });
+		expect(cfgCompactionThresholdPercent.get(reopenedSettings)).toBe(-1);
+		expect(cfgCompactionMethodOrder.get(reopenedSettings)).toEqual(["shake", "soft"]);
+		expect(cfgCompactionEnabled.get(reopenedSettings)).toBe(false);
 	});
 });

@@ -278,6 +278,46 @@ describe("compact() Anthropic native lane", () => {
 		});
 	});
 
+	test("recovers a rejected Anthropic compaction image and retains the signed summary", async () => {
+		const model = makeAnthropicModel({ input: ["text", "image"] });
+		const preparation = makePreparation({
+			messagesToSummarize: [
+				{
+					role: "user",
+					content: [{ type: "image", mimeType: "image/png", data: "old-image" }],
+					timestamp: 1,
+				},
+			],
+		});
+		const original = structuredClone(preparation.messagesToSummarize);
+		const { calls, completeImpl } = recordingCompleteImpl(ctx =>
+			JSON.stringify(ctx).includes("old-image")
+				? assistantMessage(model, {
+						stopReason: "error",
+						errorStatus: 400,
+						errorMessage: "Unsupported image format",
+					})
+				: assistantMessage(model, {
+						providerPayload: {
+							type: "anthropicCompaction",
+							provider: model.provider,
+							content: NATIVE_SUMMARY,
+							signature: "sig_recovered",
+						},
+						stopDetails: { type: "compaction" },
+					}),
+		);
+
+		const result = await compact(preparation, model, "token", undefined, undefined, { completeImpl });
+
+		expect(calls).toHaveLength(2);
+		expect(calls[1]?.ctx.messages[0]?.content).toEqual([
+			{ type: "text", text: "[image omitted: the provider rejected the image input or format]" },
+		]);
+		expect(result.preserveData?.anthropicCompaction).toMatchObject({ signature: "sig_recovered" });
+		expect(preparation.messagesToSummarize).toEqual(original);
+	});
+
 	test("sends only the summarized prefix with live controls and persists the signed summary", async () => {
 		const completeSimple = vi.spyOn(ai, "completeSimple");
 		const model = makeAnthropicModel();

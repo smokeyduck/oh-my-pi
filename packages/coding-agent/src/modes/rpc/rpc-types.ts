@@ -341,6 +341,8 @@ export type RpcCommand =
 			type: "get_transcript_page";
 			cursor?: string;
 			limit?: number;
+			folded?: boolean;
+			archive?: { sessionId: string; boundaryId: string; depth: number; targetEntryId?: string };
 	  }
 
 	// Login
@@ -357,6 +359,7 @@ export type RpcCommand =
 	| { id?: string; type: "get_settings_schema" }
 	| { id?: string; type: "get_settings"; paths?: string[] }
 	| { id?: string; type: "set_setting"; path: string; value: unknown }
+	| { id?: string; type: "set_session_compaction"; sessionId: string; values: Record<string, unknown> }
 	| { id?: string; type: "reset_settings" }
 
 	// Providers
@@ -524,7 +527,7 @@ export type RpcCommand =
 	| { id?: string; type: "get_theme_colors"; name: string }
 
 	// Full display transcript (all messages, not the LLM context window)
-	| { id?: string; type: "get_transcript" }
+	| { id?: string; type: "get_transcript"; folded?: boolean }
 
 	// Voice (speech in/out). `transcribe_audio.audioBase64` carries a canonical
 	// RIFF/WAVE buffer — PCM16, mono, 16 kHz (the STT pipeline's native rate);
@@ -3051,7 +3054,7 @@ export type RpcResponse =
 			type: "response";
 			command: "get_transcript_page";
 			success: true;
-			data: RpcMessagesPage;
+			data: RpcMessagesPage & { hasOlder?: boolean };
 	  }
 
 	// Login
@@ -3127,6 +3130,7 @@ export type RpcResponse =
 				advisorActive?: boolean;
 			};
 	  }
+	| { id?: string; type: "response"; command: "set_session_compaction"; success: true }
 	| { id?: string; type: "response"; command: "reset_settings"; success: true }
 
 	// Providers

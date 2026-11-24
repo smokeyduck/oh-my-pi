@@ -533,6 +533,7 @@ export class RemoteAgentSession implements AgentViewSession {
 		return buildSessionContext(this.#entries, this.#entryIndex.leafId(), this.#entryIndex.entriesById(), {
 			transcript: true,
 			collapseCompactedHistory: options?.collapseCompactedHistory,
+			transcriptFromLatestCompaction: options?.transcriptFromLatestCompaction,
 			inFlightToolCallIds: keepLive ? this.#runToolCallIds : undefined,
 			resolveFrameData: data => lazyImageDataSync(blobs(), data),
 		});

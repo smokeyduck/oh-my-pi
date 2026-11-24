@@ -101,6 +101,7 @@ import { EditStore, type PowerAssertionOptions } from "@oh-my-pi/pi-natives";
 import { RawSseDebugBuffer } from "@oh-my-pi/pi-tui/apps/debug/raw-sse-buffer";
 import { isUserRequestEntry, transcriptEntryMessage, userTurnDraft } from "@oh-my-pi/pi-tui/chat/transcript-entry";
 import type { AdvisorConfig } from "@oh-my-pi/pi-tui/overlays/advisor-config";
+import type { ModelRoleLookup } from "@oh-my-pi/pi-tui/overlays/model-browser";
 import { formatUsageResetWindow } from "@oh-my-pi/pi-tui/overlays/usage-display";
 import { containsMagicKeyword } from "@oh-my-pi/pi-tui/prompt/magic-keywords";
 import type { ModelMention } from "@oh-my-pi/pi-tui/prompt/model-mention-syntax";
@@ -140,8 +141,6 @@ import {
 } from "@oh-my-pi/pi-utils";
 import { writeArchive } from "@oh-my-pi/pi-utils/ar";
 import { frameDataBytesBudget, readerIncludesThinking } from "@oh-my-pi/snapcompact";
-import type { AdvisorConfig } from "@oh-my-pi/pi-tui/overlays/advisor-config";
-import type { ModelRoleLookup } from "@oh-my-pi/pi-tui/overlays/model-browser";
 import { ASYNC_NOTIFY_MESSAGE_TYPE } from "@oh-my-pi/pi-tui/chat/messages";
 import { loadAdvisorTranscriptCosts } from "../advisor";
 import {

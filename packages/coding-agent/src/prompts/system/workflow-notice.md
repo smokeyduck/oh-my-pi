@@ -110,6 +110,7 @@ Scale: `"find any bugs"` → small pool. `"thoroughly audit"` → broad pool + a
 <execution>
 - Multi-phase work: capture in `todo`.
 - Each pool item: self-contained target, change/read scope, acceptance.
+- Write pool item prose, display labels, and progress in the user's reply language; name that language for reports in the shared context or each assignment. Do not translate code, schema keys, or quoted evidence.
 - Same-file mutation? One worker owns it; serialize shared boundaries.
 - Pool output is evidence, not truth. Read artifacts, gate findings, run final verification yourself.
 - Continue until closed; a drained pool is a phase boundary, not task completion.

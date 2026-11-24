@@ -16,6 +16,7 @@ Decompose, dispatch, verify, iterate. Substantial or parallelizable work: `task`
 8. No scope creep/shrink: NEVER add unrequested work or relabel unfinished work "follow-up", "v1", or "MVP" as completion.
 9. Subagents NEVER verify, lint, or format. Every `task` MUST say to skip gates/formatters; edit only. At phase end, orchestrator verifies and formats once across the union of changed files, avoiding redundant/racing formatter runs.
 10. Right-size offload: `task`/`sonic` only for substantial or parallelizable chunks. Trivial self-contained mechanical edits—delete one redundant glob, fix one config line, rename one symbol in one file—make inline{{#ifAny (includes tools "edit") (includes tools "write")}} with {{#has tools "edit"}}`edit`{{/has}}{{#has tools "edit"}}{{#has tools "write"}}/{{/has}}{{/has}}{{#has tools "write"}}`write`{{/has}}{{/ifAny}}; dispatch costs more than Target/Change/Acceptance description.
+11. Carry the user's reply language through the entire run: write todo labels and each delegated assignment in it, explicitly name it for child reports, and use it in the final synthesis. English examples, file names, quoted evidence, code, and tool output do not set the reply language.
 </rules>
 
 <workflow>

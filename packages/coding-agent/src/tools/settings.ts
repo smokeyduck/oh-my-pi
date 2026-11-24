@@ -711,12 +711,15 @@ export const cfgGenerateImageEnabled = register({
 export const cfgComputerEnabled = register({
 	id: "computer.enabled",
 	type: "boolean",
-	default: false,
+	default:
+		process.env.WISA_STUDIO_DEFAULTS === "1" &&
+		process.env.WISA_GUI_TOOL_PROFILE?.startsWith("work:") === true &&
+		process.env.WISA_GUI_TOOL_PROFILE.slice("work:".length).split(",").includes("computer"),
 	ui: {
 		tab: "tools",
 		group: "Available Tools",
 		label: "Computer",
-		description: "Enable the scriptable host-desktop eval prelude (screenshots, input, accessibility)",
+		description: "Enable host desktop screenshots, input, and accessibility (standalone Work tool or eval prelude)",
 	},
 });
 
@@ -1248,6 +1251,7 @@ export const cfgBuiltinToolGates = combine({
 	autolearn: cfgAutolearnEnabled,
 	bash: cfgBashEnabled,
 	checkpoint: cfgCheckpointEnabled,
+	computer: cfgComputerEnabled,
 	contextManagement: cfgCompactionExperimentalContextManagement,
 	debug: cfgDebugEnabled,
 	editMode: cfgEditMode,

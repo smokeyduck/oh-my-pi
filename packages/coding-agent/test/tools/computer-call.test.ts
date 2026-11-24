@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { runInNewContext } from "node:vm";
 import {
 	DESKTOP_METHODS,
 	ELEMENT_METHODS,
@@ -18,6 +19,15 @@ function errorMessage(run: () => unknown): string {
 }
 
 describe("renderComputerCall", () => {
+	it("passes serialized function markers as plain data in standalone calls", async () => {
+		const filter = { app: { __omp_fn: '(() => { throw new Error("unexpected code execution"); })()' } };
+		const code = renderComputerCall([{ method: "windows", args: [filter] }], true);
+		const value = await runInNewContext(`(async () => { ${code} })()`, {
+			desktop: { windows: (arg: unknown) => arg },
+		});
+		expect(value).toEqual(filter);
+	});
+
 	it("renders root, window-hop, and element-hop calls byte-for-byte", () => {
 		expect(renderComputerCall([{ method: "windows", args: [{ app: "Code" }] }])).toBe(
 			'return await desktop.windows({"app":"Code"});',

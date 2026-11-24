@@ -17,6 +17,7 @@ import { CURRENT_SESSION_VERSION, type SessionHeader } from "@oh-my-pi/pi-coding
 import { loadEntriesFromFile } from "@oh-my-pi/pi-coding-agent/session/session-loader";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { createTools, resolveBuiltinToolPlan, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import { cfgComputerEnabled } from "@oh-my-pi/pi-coding-agent/tools/settings";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
 const tempDirs: TempDir[] = [];
@@ -193,6 +194,7 @@ it("applies desktop tool profiles to the actual built-in plan without converting
 	const settings = await Settings.loadIsolated({ cwd, agentDir: cwd, inMemory: true });
 	cfgAutolearnEnabled.override(settings, false);
 	cfgEditMode.override(settings, "hashline");
+	cfgComputerEnabled.override(settings, true);
 	const registry = new ModelRegistry(authStorage);
 	const manager = SessionManager.create(cwd, path.join(cwd, "sessions"));
 	const gui = parseArgs(["--mode", "rpc-ui"]);
@@ -206,7 +208,7 @@ it("applies desktop tool profiles to the actual built-in plan without converting
 		skipPythonPreflight: true,
 	};
 	try {
-		process.env.WISA_GUI_TOOL_PROFILE = "work:read,edit,learn,manage_skill";
+		process.env.WISA_GUI_TOOL_PROFILE = "work:read,computer,edit,learn,manage_skill";
 		const work = await buildSessionOptions(gui, [], manager, registry, settings);
 		expect(work.restrictToolNames).toBe(true);
 		expect(manager.getHeader()?.kind).not.toBe("chat");
@@ -214,14 +216,21 @@ it("applies desktop tool profiles to the actual built-in plan without converting
 			{ ...toolSession, restrictToolNames: work.restrictToolNames },
 			work.toolNames,
 		);
-		expect(workPlan.names).toEqual(["read", "edit"]);
+		expect(workPlan.names).toEqual(["read", "edit", "computer"]);
 		cfgAutolearnEnabled.override(settings, true);
 		cfgMemoryBackend.override(settings, "local");
 		const learningPlan = await resolveBuiltinToolPlan(
 			{ ...toolSession, restrictToolNames: work.restrictToolNames },
 			work.toolNames,
 		);
-		expect(learningPlan.names).toEqual(["read", "edit", "learn", "manage_skill"]);
+		expect(learningPlan.names).toEqual(["read", "edit", "computer", "learn", "manage_skill"]);
+		cfgComputerEnabled.override(settings, false);
+		const computerOff = await resolveBuiltinToolPlan(
+			{ ...toolSession, restrictToolNames: work.restrictToolNames },
+			work.toolNames,
+		);
+		expect(computerOff.names).not.toContain("computer");
+		cfgComputerEnabled.override(settings, true);
 
 		process.env.WISA_GUI_TOOL_PROFILE = "work:";
 		const blank = await buildSessionOptions(gui, [], manager, registry, settings);
@@ -236,6 +245,7 @@ it("applies desktop tool profiles to the actual built-in plan without converting
 			disabledBuiltinTools: coding.disabledBuiltinTools,
 		});
 		expect(codingPlan.names).toContain("read");
+		expect(codingPlan.names).not.toContain("computer");
 		expect(codingPlan.names).not.toContain("bash");
 		expect(codingPlan.names).not.toContain("ast_grep");
 		expect(codingPlan.names).not.toContain("edit");

@@ -1,5 +1,5 @@
 import { type Type, type } from "@oh-my-pi/omptype";
-import type { AgentToolResult, ToolApprovalDecision } from "@oh-my-pi/pi-agent-core";
+import type { AgentTool, AgentToolResult, ToolApprovalDecision } from "@oh-my-pi/pi-agent-core";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { classifyModel } from "@oh-my-pi/pi-catalog/identity";
 import type { DesktopCapabilities } from "@oh-my-pi/pi-natives";
@@ -9,7 +9,15 @@ import { callSessionTool } from "../eval/js/tool-bridge";
 import type { EvalPreludeContext, HostEvalPreludeDefinition } from "../eval/preludes";
 import computerUsePrompt from "../prompts/system/computer-use.md" with { type: "text" };
 import { enforceInlineByteCap } from "@oh-my-pi/pi-tui/tools/streaming-output";
-import { type ComputerCallStep, isReadOnlyComputerCall, renderComputerCall } from "./computer/call";
+import {
+	type ComputerCallStep,
+	DESKTOP_METHODS,
+	DISPLAY_METHODS,
+	ELEMENT_METHODS,
+	isReadOnlyComputerCall,
+	renderComputerCall,
+	WINDOW_METHODS,
+} from "./computer/call";
 import {
 	type ComputerScreenshot,
 	type ComputerSessionSnapshot,
@@ -73,8 +81,23 @@ interface ComputerCallParams {
 	timeout?: number;
 }
 
-type ComputerParams = ComputerRunParams | ComputerCallParams | { action: "capabilities" } | { action: "close" };
+type ComputerToolParams = ComputerCallParams | { action: "capabilities" } | { action: "close" };
+type ComputerParams = ComputerRunParams | ComputerToolParams;
 type ComputerParamsSchema = Type<ComputerParams>;
+const getComputerToolSchema: () => Type<ComputerToolParams> = once(() =>
+	type({
+		action: "'call'",
+		chain: type({ method: "string", args: "unknown[]" })
+			.array()
+			.describe(
+				"One desktop helper; window, display and ref can be followed by one handle method. Arguments are JSON data.",
+			),
+		"timeout?": type("number").describe("Call budget in seconds"),
+		"+": "reject",
+	})
+		.or({ action: "'capabilities'", "+": "reject" })
+		.or({ action: "'close'", "+": "reject" }),
+);
 
 const getComputerParamsSchema: () => ComputerParamsSchema = once(() =>
 	type({
@@ -89,17 +112,7 @@ const getComputerParamsSchema: () => ComputerParamsSchema = once(() =>
 		),
 		"timeout?": type("number").describe("run budget in seconds"),
 		"+": "reject",
-	})
-		.or({
-			action: "'call'",
-			chain: type({ method: "string", args: "unknown[]" })
-				.array()
-				.describe("desktop helper invocation with at most one window/element handle hop"),
-			"timeout?": type("number").describe("run budget in seconds"),
-			"+": "reject",
-		})
-		.or({ action: "'capabilities'", "+": "reject" })
-		.or({ action: "'close'", "+": "reject" }),
+	}).or(getComputerToolSchema()),
 );
 
 interface ComputerPreludeDetails {
@@ -132,22 +145,84 @@ export function computerApproval(args: unknown): ToolApprovalDecision {
 	return args.action === "run" && "read_only" in args && args.read_only === true ? "read" : "exec";
 }
 
-/**
- * Computer prompts rendered for who decides takeover: the model, under the default `computer.takeover` modes, or
- * omp, under `foreground` and `always`. Each template has those two variants, rendered once.
- */
-const modelTakeoverRenders = new Map<string, string>();
-const ompTakeoverRenders = new Map<string, string>();
+// Each template has two takeover variants, with separate standalone and eval guidance.
+const computerPromptRenders = {
+	eval: [new Map<string, string>(), new Map<string, string>()],
+	standalone: [new Map<string, string>(), new Map<string, string>()],
+} as const;
 
-function renderComputerPrompt(template: string, mode: ComputerSessionSnapshot["takeover"]): string {
+function renderComputerPrompt(template: string, mode: ComputerSessionSnapshot["takeover"], standalone = false): string {
 	const ompTakeover = !modelChoosesTakeover(mode);
-	const renders = ompTakeover ? ompTakeoverRenders : modelTakeoverRenders;
+	const renders = computerPromptRenders[standalone ? "standalone" : "eval"][ompTakeover ? 1 : 0];
 	let rendered = renders.get(template);
 	if (rendered === undefined) {
-		rendered = prompt.render(template, { ompTakeover });
+		rendered = prompt.render(template, { ompTakeover, standalone });
 		renders.set(template, rendered);
 	}
 	return rendered;
+}
+
+function ownComputerController(session: ToolSession, controller: ComputerController): () => void {
+	const unregister = registerComputerController(session.getEvalKernelOwnerId?.() ?? undefined, controller);
+	return () => {
+		unregister();
+		void controller.close();
+	};
+}
+
+const directComputerDescription = [
+	"Inspect and operate the real host desktop. `capabilities` reports support; `close` releases the desktop session.",
+	'Example: {"action":"call","chain":[{"method":"window","args":[{"app":"Notepad"}]},{"method":"ax","args":[]}]}',
+	`Desktop methods: ${Object.keys(DESKTOP_METHODS).join(", ")}.`,
+	`After window(id or filter): ${Object.keys(WINDOW_METHODS).join(", ")}.`,
+	`After display(id): ${Object.keys(DISPLAY_METHODS).join(", ")}.`,
+	`After ref(accessibility ref): ${Object.keys(ELEMENT_METHODS).join(", ")}.`,
+	'Use window(id).click(x, y, options), window(id).type(text), window(id).press("ctrl+a"), or ref("e5").press().',
+	"Coordinates come from the latest full screenshot of that target; zoom does not change that frame. Ref IDs come from a fresh accessibility tree.",
+].join("\n");
+
+/** Native desktop helpers without a general-purpose scripting backend. */
+export function createComputerTool(session: ToolSession): AgentTool<Type<ComputerToolParams>, unknown> {
+	let controller: ComputerController | undefined;
+	const getController = () => {
+		if (!controller) {
+			controller = new ComputerSupervisor(session);
+			const dispose = ownComputerController(session, controller);
+			const cleanup = () => {
+				unlisten();
+				unregisterDispose?.();
+				controller = undefined;
+				dispose();
+			};
+			const unlisten = cfgComputerEnabled.listen(session.settings, enabled => {
+				if (!enabled) cleanup();
+			});
+			const unregisterDispose = session.registerDisposeCallback?.(cleanup);
+		}
+		return controller;
+	};
+	return {
+		name: "computer",
+		label: "Computer",
+		loadMode: "essential",
+		concurrency: "exclusive",
+		get description() {
+			return `${directComputerDescription}\n\n${renderComputerPrompt(computerUsePrompt, cfgComputerTakeover.get(session.settings), true)}`;
+		},
+		parameters: getComputerToolSchema(),
+		approval: args => {
+			const tier = computerApproval(args);
+			return tier === "read" || (args && typeof args === "object" && "action" in args && args.action === "close")
+				? "read"
+				: { tier: "exec", policy: "prompt", reason: "Desktop input or mutation" };
+		},
+		execute: async (_id, params, signal, _onUpdate, context) => {
+			if (!cfgComputerEnabled.get(session.settings)) throw new ToolError("Computer use is disabled.");
+			if (params.action === "close" && !controller)
+				return { content: [{ type: "text", text: "No computer session open" }] };
+			return await invokeComputer(session, getController(), params, { signal, context }, true);
+		},
+	};
 }
 
 /** Create the enabled-only computer host prelude for one tool session. */
@@ -157,14 +232,11 @@ export function createComputerPrelude(
 		new ComputerSupervisor(currentSession, undefined, undefined, callSessionTool),
 ): HostEvalPreludeDefinition {
 	const controller = createController(session);
-	const unregisterOwner = registerComputerController(session.getEvalKernelOwnerId?.() ?? undefined, controller);
 	// Eval-first-use boundary: source/declaration assets stay unloaded until a
 	// JavaScript or Python kernel actually asks for its enabled preludes.
 	const { computerPreludeAssets } = require("./computer/prelude-definition");
-	session.registerDisposeCallback?.(() => {
-		unregisterOwner();
-		void controller.close();
-	});
+	const dispose = ownComputerController(session, controller);
+	session.registerDisposeCallback?.(dispose);
 
 	return {
 		name: "computer",
@@ -214,14 +286,15 @@ async function invokeComputer(
 	session: ToolSession,
 	controller: ComputerController,
 	params: ComputerParams,
-	context: EvalPreludeContext,
+	context: Pick<EvalPreludeContext, "signal" | "context">,
+	standalone = false,
 ): Promise<AgentToolResult<unknown>> {
 	throwIfAborted(context.signal);
 
 	switch (params.action) {
 		case "run":
 		case "call":
-			return await runComputer(session, controller, params, context);
+			return await runComputer(session, controller, params, context, standalone);
 		case "capabilities": {
 			const capabilities = await controller.capabilities(buildComputerSnapshot(session, true), context.signal);
 			throwIfAborted(context.signal);
@@ -244,8 +317,8 @@ async function invokeComputer(
 
 const COMPUTER_RUN_SCOPE: readonly string[] = ["desktop", "wait", "assert"];
 
-function resolveComputerRunCode(params: ComputerRunParams | ComputerCallParams): string {
-	if (params.action === "call") return renderComputerCall(params.chain);
+function resolveComputerRunCode(params: ComputerRunParams | ComputerCallParams, standalone: boolean): string {
+	if (params.action === "call") return renderComputerCall(params.chain, standalone);
 	const code = params.code?.trim();
 	const fn = params.fn?.trim();
 	const hasCode = code !== undefined && code.length > 0;
@@ -286,10 +359,11 @@ async function runComputer(
 	session: ToolSession,
 	controller: ComputerController,
 	params: ComputerRunParams | ComputerCallParams,
-	context: EvalPreludeContext,
+	context: Pick<EvalPreludeContext, "signal" | "context">,
+	standalone: boolean,
 ): Promise<AgentToolResult<unknown>> {
 	const signal = context.signal;
-	const code = resolveComputerRunCode(params);
+	const code = resolveComputerRunCode(params, standalone);
 	// Direct inspection calls run read-only so the desktop guard backs the read approval tier.
 	const readOnly = params.action === "call" ? isReadOnlyComputerCall(params.chain) : (params.read_only ?? false);
 	const timeoutSeconds = clampTimeout("computer", params.timeout, cfgToolsMaxTimeout.get(session.settings));
@@ -306,10 +380,11 @@ async function runComputer(
 	if (run.returnValue !== undefined) details.value = run.returnValue;
 	populateCapabilityDetails(details, run.capabilities);
 
-	const text = run.displays
+	const textParts = run.displays
 		.filter((content): content is { type: "text"; text: string } => content.type === "text")
-		.map(content => content.text)
-		.join("\n");
+		.map(content => content.text);
+	if (standalone && run.returnValue !== undefined) textParts.push(stringifyReturnValue(run.returnValue));
+	const text = textParts.join("\n");
 	const cappedText = await enforceInlineByteCap(text, {
 		saveArtifact: full => saveComputerOutputArtifact(session, full),
 	});

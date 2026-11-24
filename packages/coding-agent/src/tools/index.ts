@@ -57,6 +57,7 @@ import { AstGrepTool } from "./ast-grep";
 import { BashTool } from "./bash";
 import { type BuiltinToolName, type HiddenToolName, normalizeToolNames } from "./builtin-names";
 import { type CheckpointState, CheckpointTool, type CompletedRewindState, RewindTool } from "./checkpoint";
+import { createComputerTool } from "./computer";
 import { ContextNotesTool, NewContextTool } from "./context-notes";
 import { DebugTool } from "./debug";
 import { EvalTool } from "./eval";
@@ -92,6 +93,7 @@ import {
 	cfgAstGrepEnabled,
 	cfgAsyncEnabled,
 	cfgCheckpointEnabled,
+	cfgComputerEnabled,
 	cfgDebugEnabled,
 	cfgGithubEnabled,
 	cfgGlobEnabled,
@@ -627,6 +629,7 @@ export const BUILTIN_TOOLS: Record<BuiltinToolName, ToolFactory> = {
 	bash: s => new BashTool(s),
 	edit: s => new EditTool(s),
 	ast_grep: s => new AstGrepTool(s),
+	computer: createComputerTool,
 	ast_edit: s => new AstEditTool(s),
 	ask: AskTool.createIf,
 	debug: DebugTool.createIf,
@@ -815,6 +818,8 @@ export async function resolveBuiltinToolPlan(session: ToolSession, toolNames?: s
 		// Without an edit tool, bash is the remaining way to modify existing files.
 		if (name === "edit") return !editDisabled;
 		if (name === "bash") return editDisabled || cfgBashEnabled.get(session.settings);
+		if (name === "computer")
+			return requestedTools?.includes("computer") === true && cfgComputerEnabled.get(session.settings);
 		if (name === "eval") return allowEval;
 		if (name === "debug") return cfgDebugEnabled.get(session.settings);
 		if (name === "todo")

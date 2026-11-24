@@ -7,6 +7,7 @@ export const BUILTIN_TOOL_NAMES = [
 	"ast_grep",
 	"ast_edit",
 	"ask",
+	"computer",
 	"debug",
 	"eval",
 	"github",
@@ -59,6 +60,10 @@ export const BUILTIN_TOOL_HELP: Record<BuiltinToolName, BuiltinToolHelp> = {
 		detectedWhen: "a native judge model is available",
 	},
 	eval: { summary: "Run Python/JS cells with browser, computer, and binary-analysis helpers", defaultState: "on" },
+	computer: {
+		summary: "Inspect and operate the host desktop without eval (explicit tool lists only)",
+		defaultState: "off",
+	},
 	task: { summary: "Launch subagents for parallel work", defaultState: "on" },
 	wait: { summary: "Wait for background jobs", defaultState: "on" },
 	todo: { summary: "Track a todo list", defaultState: "on" },

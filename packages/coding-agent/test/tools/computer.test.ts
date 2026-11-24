@@ -1,4 +1,5 @@
 import { afterAll, afterEach, describe, expect, it, vi } from "bun:test";
+import { type } from "@oh-my-pi/omptype";
 import type { AgentToolContext } from "@oh-my-pi/pi-agent-core";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -9,7 +10,8 @@ import type { EvalPreludeDefinition, HostEvalPreludeDefinition } from "@oh-my-pi
 import { executeJs } from "@oh-my-pi/pi-coding-agent/eval/js/executor";
 import { disposeAllKernelSessions, executePython } from "@oh-my-pi/pi-coding-agent/eval/py/executor";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import { computerApproval, createComputerPrelude } from "@oh-my-pi/pi-coding-agent/tools/computer";
+import { resolveApproval } from "@oh-my-pi/pi-coding-agent/tools/approval";
+import { computerApproval, createComputerPrelude, createComputerTool } from "@oh-my-pi/pi-coding-agent/tools/computer";
 import { isReadOnlyComputerCall, renderComputerCall } from "@oh-my-pi/pi-coding-agent/tools/computer/call";
 import {
 	type ComputerSessionSnapshot,
@@ -646,6 +648,15 @@ describe("computer prelude", () => {
 		expect(computerApproval({ action: "close" })).toBe("exec");
 		expect(computerApproval("garbage")).toBe("exec");
 		await prelude.invoke({ action: "close" }, context);
+	});
+
+	it("standalone computer never treats desktop input as preapproved, even in yolo", () => {
+		const tool = createComputerTool(toolSession());
+		const click = { action: "call", chain: [{ method: "click", args: [20, 30] }] };
+		expect(resolveApproval(tool, click, "yolo", { computer: "allow" }).policy).toBe("prompt");
+		expect(resolveApproval(tool, click, "yolo", { computer: "deny" }).policy).toBe("deny");
+		expect(resolveApproval(tool, { action: "capabilities" }, "yolo").policy).toBe("allow");
+		expect(tool.parameters({ action: "run", code: "1" })).toBeInstanceOf(type.errors);
 	});
 
 	it("keeps text it types, sets or copies out of status lines", () => {

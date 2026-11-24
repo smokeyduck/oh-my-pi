@@ -7,6 +7,7 @@
 - RPC hosts that explicitly enable `WISA_BTW_WORKSPACE_READ=1` give compatible Agent sessions' `/btw` turns a bounded workspace text reader. The normal tool catalog is not exposed to these turns. Chat sessions remain tool-free.
 - Desktop RPC hosts can opt into provider-native adaptive reasoning on verified Anthropic and Bedrock routes, and omit reasoning overrides where control is not verified. The CLI keeps its own Auto behavior.
 - Desktop RPC hosts can supply distinct Coding and Work tool profiles and select a Coding edit mode without rewriting global settings. Desktop sessions default to local memory and Auto-Learn unless explicitly configured otherwise.
+- Desktop Work profiles can expose native `computer` controls without enabling shell or general-purpose eval. Screen inspection and input use the existing desktop worker; input prompts for approval.
 - Desktop RPC hosts can reset global non-credential settings while retaining project settings and installed resources.
 
 ### Fixed

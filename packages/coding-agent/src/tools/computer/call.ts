@@ -147,13 +147,23 @@ export function isReadOnlyComputerCall(chain: readonly ComputerCallStep[]): bool
 	return HANDLE_ROOTS[root.method]!.methods[chain[1]!.method] === "read";
 }
 
+/** Standalone tool arguments are data, never eval's serialized function/RegExp markers. */
+function renderJsonCallChain(chain: readonly ComputerCallStep[]): string {
+	return chain
+		.map(({ method, args }) =>
+			args.length ? `${method}(...JSON.parse(${JSON.stringify(JSON.stringify(args))}))` : `${method}()`,
+		)
+		.join(".");
+}
+
 /** Render an allowlisted desktop helper or handle call for the persistent computer runtime. */
-export function renderComputerCall(chain: readonly ComputerCallStep[]): string {
+export function renderComputerCall(chain: readonly ComputerCallStep[], jsonOnly = false): string {
 	validateChain(chain);
+	const render = jsonOnly ? renderJsonCallChain : renderCallChain;
 	const root = chain[0]!;
-	if (chain.length === 1) return `return await desktop.${renderCallChain([root])};`;
+	if (chain.length === 1) return `return await desktop.${render([root])};`;
 	// `desktop.ref(id)` returns a thenable handle whose element methods check their arguments before the lookup.
-	if (root.method === "ref") return `return await desktop.${renderCallChain(chain)};`;
+	if (root.method === "ref") return `return await desktop.${render(chain)};`;
 	const step = chain[1]!;
 	const id = root.args[0];
 	if (
@@ -164,7 +174,7 @@ export function renderComputerCall(chain: readonly ComputerCallStep[]): string {
 	) {
 		// A retained handle's id is already exact. Native resolves it for this operation;
 		// rediscovering it through the visible list loses minimized windows.
-		return `return await desktop.${renderCallChain([{ method: "windowAccess", args: [String(id)] }, step])};`;
+		return `return await desktop.${render([{ method: "windowAccess", args: [String(id)] }, step])};`;
 	}
-	return `return await (await desktop.${renderCallChain([root])}).${renderCallChain([chain[1]!])};`;
+	return `return await (await desktop.${render([root])}).${render([chain[1]!])};`;
 }

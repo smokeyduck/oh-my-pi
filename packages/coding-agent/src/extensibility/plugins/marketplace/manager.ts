@@ -844,9 +844,11 @@ export class MarketplaceManager {
 	// Plugins whose catalog side declares no version are skipped: the "0.0.0" a reinstall records
 	// for them is a fallback, not a newer version, and an unattended upgrade must not replace a
 	// tagged install with it. The named force-reinstall preview still shows that fallback.
-	async checkForUpdates(): Promise<Array<{ pluginId: string; scope: "user" | "project"; from: string; to: string }>> {
+	async checkForUpdates(
+		marketplace?: string,
+	): Promise<Array<{ pluginId: string; scope: "user" | "project"; from: string; to: string }>> {
 		const updates: Array<{ pluginId: string; scope: "user" | "project"; from: string; to: string }> = [];
-		for (const row of await this.listCatalogVersions()) {
+		for (const row of await this.listCatalogVersions(marketplace)) {
 			const { to } = row;
 			if (to && row.declared && classifyVersionChange(row.from, to) === "upgrade") {
 				updates.push({ pluginId: row.pluginId, scope: row.scope, from: row.from, to });
@@ -861,7 +863,9 @@ export class MarketplaceManager {
 	// undefined only for a remote source with no catalog version (known only after cloning). Same,
 	// older and newer versions all appear; reads only the registries, cached catalogs and local
 	// manifests.
-	async listCatalogVersions(): Promise<
+	async listCatalogVersions(
+		marketplace?: string,
+	): Promise<
 		Array<{ pluginId: string; scope: "user" | "project"; from: string; to: string | undefined; declared: boolean }>
 	> {
 		const mktReg = await readMarketplacesRegistry(this.#opts.marketplacesRegistryPath);
@@ -884,7 +888,7 @@ export class MarketplaceManager {
 			const instReg = await readInstalledPluginsRegistry(regPath);
 			for (const [pluginId, entries] of Object.entries(instReg.plugins)) {
 				const parsed = parsePluginId(pluginId);
-				if (!parsed) continue;
+				if (!parsed || (marketplace && parsed.marketplace !== marketplace)) continue;
 				const installed = entries[0];
 				if (!installed) continue;
 

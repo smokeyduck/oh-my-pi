@@ -15,8 +15,9 @@
  * `{ ok:false, error }` from the mutating helpers; `get_plugin_detail` throws
  * (its result shape has no error channel).
  */
+import { stat } from "node:fs/promises";
 import * as path from "node:path";
-import { pathIsWithin } from "@oh-my-pi/pi-utils";
+import { isEnoent, pathIsWithin } from "@oh-my-pi/pi-utils";
 import { clearPluginRootsAndCaches } from "../../discovery/helpers";
 import { getEnabledPlugins } from "../../extensibility/plugins/loader";
 import { PluginManager, validateSetting } from "../../extensibility/plugins/manager";
@@ -78,19 +79,24 @@ async function findRpcPlugin(
 	const summary = (await marketplace.listInstalledPlugins()).find(candidate => candidate.id === pluginId);
 	const entry = summary?.entries[0];
 	if (!entry) return undefined;
-	const pkg = (await Bun.file(`${entry.installPath}/package.json`).json()) as {
-		name?: string;
-		version?: string;
-		omp?: PluginManifest;
-		pi?: PluginManifest;
-	};
+	const pkg: { name?: string; version?: string; omp?: PluginManifest; pi?: PluginManifest } = await Bun.file(
+		path.join(entry.installPath, "package.json"),
+	)
+		.json()
+		.catch(async error => {
+			if (!isEnoent(error)) throw error;
+			// Declarative marketplace plugins do not need an npm manifest. A missing cache still fails.
+			if (!(await stat(entry.installPath)).isDirectory()) throw error;
+			return {};
+		});
 	const manifest = pkg.omp ?? pkg.pi;
-	if (!manifest) return undefined;
 	const packageName = pkg.name?.trim() || name;
-	const effective = (await getEnabledPlugins(cwd)).find(
-		plugin => plugin.path === entry.installPath || plugin.name === packageName,
-	);
-	if (effective) return effective;
+	if (manifest) {
+		const effective = (await getEnabledPlugins(cwd)).find(
+			plugin => plugin.path === entry.installPath || plugin.name === packageName,
+		);
+		if (effective) return effective;
+	}
 	return {
 		name: packageName,
 		version: pkg.version ?? entry.version,

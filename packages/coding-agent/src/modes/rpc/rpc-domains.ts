@@ -25,6 +25,7 @@ import { loadSkills } from "../../extensibility/skills";
 import { MCPManager } from "../../mcp";
 import { readMCPConfigFile } from "../../mcp/config-writer";
 import { hasMcpAuthorizationHeader, lookupMcpOAuthCredential } from "../../mcp/oauth-credentials";
+import { analyzeAuthError } from "../../mcp/oauth-discovery";
 import type { MCPServerConfig } from "../../mcp/types";
 import { resolveMemoryBackend } from "../../memory-backend";
 import type { AgentSession } from "../../session/agent-session";
@@ -185,24 +186,30 @@ export async function buildRpcMcpServersResult(session: AgentSession): Promise<R
 		// user on a same-name hit, matching the `configured` merge above).
 		// Discovered-only entries (manager-known but in neither file) omit it.
 		const scope = projectConfig.mcpServers?.[name] ? "project" : userConfig.mcpServers?.[name] ? "user" : undefined;
-		// `lastError` is intentionally omitted: the manager reports connection
-		// failures through transient status events, not a queryable store.
+		const status = manager?.getConnectionStatus(name) ?? "disconnected";
+		const connectError = status === "disconnected" ? manager?.getLastConnectError(name) : undefined;
+		const challenged =
+			connectError &&
+			(config?.type === "http" || config?.type === "sse") &&
+			analyzeAuthError(new Error(connectError), config.url).authType === "oauth";
 		const credential = config ? lookupMcpOAuthCredential(authStorage, config) : undefined;
 		const authState: RpcMcpServerInfo["authState"] = !config
 			? "none"
-			: credential
-				? credential.credential.expires > Date.now()
-					? "authorized"
-					: "expired"
-				: hasMcpAuthorizationHeader(config)
-					? "authorized"
-					: config.auth?.type === "oauth" || config.oauth
-						? "required"
-						: "none";
+			: challenged
+				? "required"
+				: credential
+					? credential.credential.expires > Date.now()
+						? "authorized"
+						: "expired"
+					: hasMcpAuthorizationHeader(config)
+						? "authorized"
+						: config.auth?.type === "oauth" || config.oauth
+							? "required"
+							: "none";
 		servers.push({
 			name,
 			transport: config?.type ?? (config ? "stdio" : "unknown"),
-			status: manager?.getConnectionStatus(name) ?? "disconnected",
+			status,
 			toolCount: tools.filter(tool => tool.mcpServerName === name).length,
 			enabled: config?.enabled !== false && !disabledNames.has(name),
 			authed: config ? credential !== undefined || hasMcpAuthorizationHeader(config) : false,

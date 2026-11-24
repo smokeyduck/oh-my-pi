@@ -520,6 +520,49 @@ describe("applyRpcMarketplaceAction", () => {
 		expect(remote?.source).toEqual({ source: "url", url: "https://github.com/example/remote.git", sha: "abc123" });
 	});
 
+	it("opens installed declarative plugins and advertises only newer catalog releases", async () => {
+		spyMarketplacePaths();
+		const fixture = path.join(tmpRoot, "declarative-marketplace");
+		const pluginDir = path.join(fixture, "declarative");
+		fs.mkdirSync(pluginDir, { recursive: true });
+		fs.mkdirSync(path.join(fixture, ".claude-plugin"));
+		const writeManifest = (version: string) =>
+			fs.writeFileSync(path.join(pluginDir, "plugin.json"), JSON.stringify({ name: "declarative", version }));
+		writeManifest("1.0.0");
+		fs.writeFileSync(
+			path.join(fixture, ".claude-plugin", "marketplace.json"),
+			JSON.stringify({
+				name: "declarative-marketplace",
+				owner: { name: "Test" },
+				plugins: [{ name: "declarative", source: "./declarative", strict: false }],
+			}),
+		);
+		const session = stubSession();
+		const marketplace = "declarative-marketplace";
+		expect(await applyRpcMarketplaceAction(session, { action: "add", source: fixture })).toEqual({ ok: true });
+		const install = await applyRpcMarketplaceAction(session, {
+			action: "install",
+			plugin: "declarative",
+			marketplace,
+		});
+		expect(install).toMatchObject({ ok: true });
+		expect(await buildRpcPluginDetail(session, `declarative@${marketplace}`)).toEqual({
+			id: "declarative",
+			enabled: true,
+			features: [],
+			values: {},
+			configuredKeys: [],
+		});
+		const list = () => applyRpcMarketplaceAction(session, { action: "list_available", marketplace });
+		const installed = (await list()).plugins?.[0];
+		expect(installed).toMatchObject({ name: "declarative", installed: true });
+		expect(installed?.updateAvailable).toBeUndefined();
+		writeManifest("0.9.0");
+		expect((await list()).plugins?.[0].updateAvailable).toBeUndefined();
+		writeManifest("1.1.0");
+		expect((await list()).plugins?.[0].updateAvailable).toBe(true);
+	});
+
 	it("reports activation: executable vs resource-only installs and toggles", async () => {
 		spyMarketplacePaths();
 		const fixtureDir = path.join(tmpRoot, "fixture-marketplace");

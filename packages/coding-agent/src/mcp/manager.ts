@@ -1380,6 +1380,11 @@ export class MCPManager implements MCPManagerApi {
 		return "disconnected";
 	}
 
+	/** Last failed connection attempt, cleared on a successful connection. */
+	getLastConnectError(name: string): string | undefined {
+		return this.#lastConnectErrors.get(name);
+	}
+
 	/**
 	 * Get the source metadata for a server.
 	 */

@@ -337,6 +337,7 @@ describe("resource_metadata chain", () => {
 
 		const auth = analyzeAuthError(error);
 		expect(auth.requiresAuth).toBe(true);
+		expect(auth.authType).toBe("oauth");
 		expect(auth.resourceMetadataUrl).toBe(
 			"https://gateway.example.com/my-service/.well-known/oauth-protected-resource",
 		);

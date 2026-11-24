@@ -14,6 +14,7 @@
 
 ### Fixed
 
+- Marketplace RPC reports whether cached catalog metadata advertises an upgrade and opens declarative plugin settings without requiring `package.json`. MCP RPC recognizes OAuth protected-resource challenges on discovered HTTP servers.
 - Isolated hosts can select a project configuration namespace with `PI_PROJECT_CONFIG_DIR` and disable ambient legacy configuration with `PI_CONFIG_SOURCES=native`, without changing normal CLI defaults or explicit profile opt-ins.
 - RPC hosts can remove a global settings override again, restoring the value from the remaining configuration layers.
 - Custom compiled distributions can include their HTML session viewer so exports open without an upstream-hosted viewer release.

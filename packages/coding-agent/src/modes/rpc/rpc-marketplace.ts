@@ -181,17 +181,24 @@ export async function applyRpcMarketplaceAction(
 				if (command.marketplace && !marketplaces.some(entry => entry.name === command.marketplace)) {
 					return { ok: false, error: `Marketplace "${command.marketplace}" not found` };
 				}
+				const updateIds = new Set(
+					installedIds.size === 0
+						? []
+						: (await manager.checkForUpdates(command.marketplace)).map(update => update.pluginId),
+				);
 				const plugins: RpcMarketplacePluginInfo[] = [];
 				for (const entry of marketplaces) {
 					if (command.marketplace && entry.name !== command.marketplace) continue;
 					for (const plugin of await manager.listAvailablePlugins(entry.name)) {
+						const pluginId = `${plugin.name}@${entry.name}`;
 						const displayName = (plugin as { displayName?: unknown }).displayName;
 						const components = catalogComponents(plugin);
 						plugins.push({
 							name: plugin.name,
 							...(plugin.description !== undefined ? { description: plugin.description } : {}),
 							...(plugin.version !== undefined ? { version: plugin.version } : {}),
-							installed: installedIds.has(`${plugin.name}@${entry.name}`),
+							installed: installedIds.has(pluginId),
+							...(updateIds.has(pluginId) ? { updateAvailable: true } : {}),
 							...(typeof displayName === "string" && displayName ? { displayName } : {}),
 							...(plugin.author?.name ? { author: plugin.author.name } : {}),
 							...(plugin.license !== undefined ? { license: plugin.license } : {}),

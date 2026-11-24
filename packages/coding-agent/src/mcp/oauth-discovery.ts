@@ -256,17 +256,17 @@ export function analyzeAuthError(error: Error, serverUrl?: string): AuthDetectio
 	const oauth = extractOAuthEndpoints(error);
 	const challengeScopes = extractOAuthChallengeScopes(error);
 
-	if (oauth) {
-		const mergedScopes = oauth.scopes ?? challengeScopes;
+	if (oauth || resourceMetaMatch) {
+		const mergedScopes = oauth?.scopes ?? challengeScopes;
 		// Callers on the JSON-error-body path use `authResult.oauth` directly and
 		// skip `discoverOAuthEndpoints`; without merging the challenge scope back
 		// into the returned endpoints, `/mcp reauth` and `/mcp add` still mint a
 		// scope-less grant when the challenge advertised `scope="…"`.
-		const mergedOAuth: OAuthEndpoints = mergedScopes === oauth.scopes ? oauth : { ...oauth, scopes: mergedScopes };
+		const mergedOAuth = oauth && (mergedScopes === oauth.scopes ? oauth : { ...oauth, scopes: mergedScopes });
 		return {
 			requiresAuth: true,
 			authType: "oauth",
-			oauth: mergedOAuth,
+			...(mergedOAuth ? { oauth: mergedOAuth } : {}),
 			authServerUrl,
 			resourceMetadataUrl,
 			scopes: mergedScopes,

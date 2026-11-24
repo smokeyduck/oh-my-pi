@@ -268,6 +268,8 @@ describe("BashTool execution results", () => {
 				cancelled: false,
 				timedOut: false,
 				workingDir: process.cwd(),
+				movedCwd: false,
+				errexit: false,
 				minimized: {
 					filter: "lint",
 					text: "test/event-cache.e2e-spec.ts:281-405 multiple ... errors\n",
@@ -298,6 +300,8 @@ describe("BashTool execution results", () => {
 				cancelled: false,
 				timedOut: false,
 				workingDir: process.cwd(),
+				movedCwd: false,
+				errexit: false,
 				minimized: {
 					filter: "lint",
 					text: minimizedText,

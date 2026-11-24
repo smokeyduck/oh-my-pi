@@ -3556,7 +3556,7 @@ export class ModelRegistry {
 		const providers = new Map(this.#discoverableProviders.map(config => [config.provider, config.discovery.type]));
 		return models.map(model => {
 			const providerType = providers.get(model.provider);
-			if (providerType === "litellm" && model.providerType !== providerType) {
+			if ((providerType === "litellm" || providerType === "openrouter") && model.providerType !== providerType) {
 				return buildDiscoveredModel(toModelSpec(model), providerType);
 			}
 			if (providerType !== "llama.cpp") return model;
@@ -5061,6 +5061,8 @@ export interface ProviderConfigInput {
 		snapcompactShape?: Model<Api>["snapcompactShape"];
 		cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
 		contextWindow: number;
+		/** Optional larger window selected by the extended-context policy. */
+		maxContextWindow?: number;
 		maxTokens: number;
 		promptCache?: Model<Api>["promptCache"];
 		/** WebSocket preference within catalog policy; explicit false disables transport selection. */

@@ -2345,15 +2345,8 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		);
 		this.sessionManager = config.sessionManager;
 		// Only a recorded approval may turn a draft file into an execution reference.
-		for (const entry of this.sessionManager.getBranch().reverse()) {
-			if (entry.type !== "mode_change") continue;
-			if (entry.mode === "plan" || entry.mode === "plan_paused") break;
-			if (typeof entry.data?.approvedPlanFilePath === "string") {
-				this.#planReferencePath = entry.data.approvedPlanFilePath;
-				this.#planReferenceApproved = true;
-				break;
-			}
-		}
+		const approvedPlanFilePath = this.getApprovedPlanReferencePath();
+		if (approvedPlanFilePath !== undefined) this.setPlanReferencePath(approvedPlanFilePath);
 		this.settings = config.settings;
 		this.#sessionCompactionSettings = new SessionCompactionSettings(this.sessionManager, this.settings);
 		this.restrictToolNames = config.restrictToolNames === true;
@@ -8972,6 +8965,17 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 
 	getPlanReferencePath(): string {
 		return this.#planReferencePath;
+	}
+
+	getApprovedPlanReferencePath(): string | undefined {
+		const branch = this.sessionManager.getBranch();
+		for (let i = branch.length - 1; i >= 0; i--) {
+			const entry = branch[i];
+			if (entry.type !== "mode_change") continue;
+			if (entry.mode === "plan" || entry.mode === "plan_paused") break;
+			if (typeof entry.data?.approvedPlanFilePath === "string") return entry.data.approvedPlanFilePath;
+		}
+		return undefined;
 	}
 
 	get clientBridge(): ClientBridge | undefined {

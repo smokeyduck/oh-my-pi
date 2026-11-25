@@ -5141,7 +5141,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 				const state = session.getPlanModeState();
 				return success(id, "get_plan_mode", {
 					enabled: state?.enabled ?? false,
-					planFilePath: state?.planFilePath,
+					planFilePath: state?.planFilePath ?? session.getApprovedPlanReferencePath(),
 				});
 			}
 

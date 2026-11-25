@@ -219,6 +219,34 @@ describe("RpcPlanApprovalController", () => {
 		expect(await Bun.file(savePath).text()).toBe("# Saved plan\n");
 		expect(session.getPlanModeState()).toBeUndefined();
 	});
+
+	it("keeps the review on a cancelled execution session, then dispatches the full approved plan on retry", async () => {
+		const planPath = path.join(tempDir.path(), "retry-plan.md");
+		const markdown = "# Reviewed plan\n\n- Check the result.\n";
+		await Bun.write(planPath, markdown);
+		session.setPlanModeState({ enabled: true, planFilePath: planPath });
+		const controller = new RpcPlanApprovalController({ session, output: () => {}, onError: () => {} });
+		controller.syncArmed();
+		const propose = session.peekPlanProposalHandler();
+		if (!propose) throw new Error("expected plan proposal handler");
+		await propose("Reviewed plan");
+		const previousSessionId = session.sessionId;
+		vi.spyOn(session, "newSession").mockResolvedValueOnce(false);
+		const prompt = vi.spyOn(session, "prompt").mockResolvedValue(undefined);
+
+		await expect(controller.resolve({ approved: true, option: "execute" })).rejects.toThrow("was not started");
+		expect(session.sessionId).toBe(previousSessionId);
+		expect(session.getPlanModeState()).toEqual({ enabled: true, planFilePath: planPath });
+		expect(prompt).not.toHaveBeenCalled();
+
+		await expect(controller.resolve({ approved: true, option: "execute" })).resolves.toEqual({
+			approved: true,
+			dispatched: true,
+		});
+		expect(session.sessionId).not.toBe(previousSessionId);
+		expect(session.getApprovedPlanReferencePath()).toBe(planPath);
+		expect(prompt).toHaveBeenCalledWith(expect.stringContaining(markdown.trim()), { synthetic: true });
+	});
 });
 
 describe("applyRpcReloadPlugins", () => {

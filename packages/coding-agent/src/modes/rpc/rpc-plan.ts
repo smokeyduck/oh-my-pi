@@ -264,28 +264,26 @@ export class RpcPlanApprovalController {
 			}
 		}
 
-		// Exit plan mode (session-level subset of TUI #exitPlanMode — see deltas).
+		if (option === "execute") {
+			// Leave review armed until the fresh-session transition is accepted.
+			const oldLocalRoot = resolveLocalUrlToPath("local://", this.#localProtocolOptions());
+			if (!(await session.newSession())) throw new Error("The execution session was not started");
+			const newLocalRoot = resolveLocalUrlToPath("local://", this.#localProtocolOptions());
+			await copyLocalArtifactsForFreshSession(oldLocalRoot, newLocalRoot);
+			if (planFilePath.startsWith("local://")) {
+				const newLocalPath = resolveLocalUrlToPath(planFilePath, this.#localProtocolOptions());
+				await fs.mkdir(path.dirname(newLocalPath), { recursive: true });
+				await fs.writeFile(newLocalPath, planContent);
+			}
+		}
+
 		this.#pending = undefined;
 		session.setPlanModeState(undefined);
 		this.#disarm();
-		session.sessionManager.appendModeChange("none");
+		session.setPlanReferencePath(planFilePath);
+		session.sessionManager.appendModeChange("none", { approvedPlanFilePath: planFilePath });
 
-		if (option === "execute") {
-			// Fresh session carrying the session-local artifacts forward, mirroring
-			// #approvePlan's handleClearCommand + artifact copy. The plan file must
-			// be rewritten into the new session's local root because local:// is
-			// session-scoped.
-			const oldLocalRoot = resolveLocalUrlToPath("local://", this.#localProtocolOptions());
-			await session.newSession();
-			const newLocalRoot = resolveLocalUrlToPath("local://", this.#localProtocolOptions());
-			await copyLocalArtifactsForFreshSession(oldLocalRoot, newLocalRoot);
-			const newLocalPath = resolveLocalUrlToPath(planFilePath, this.#localProtocolOptions());
-			await fs.mkdir(path.dirname(newLocalPath), { recursive: true });
-			await fs.writeFile(newLocalPath, planContent);
-		} else if (option === "compact") {
-			// Pin the reference BEFORE compaction so queued turns see the approved
-			// plan (mirrors #approvePlan's compact branch).
-			session.setPlanReferencePath(planFilePath);
+		if (option === "compact") {
 			const compactionPrompt = prompt.render(planModeCompactInstructionsPrompt, { planFilePath });
 			try {
 				await session.compact(compactionPrompt);
@@ -301,8 +299,6 @@ export class RpcPlanApprovalController {
 			}
 		}
 
-		session.setPlanReferencePath(planFilePath);
-		session.markPlanReferenceSent();
 		// Seed an auto session name from the plan title (no-op when already named).
 		const seededName = humanizePlanTitle(pending.title);
 		if (seededName && !session.sessionManager.getSessionName()) {
@@ -310,8 +306,10 @@ export class RpcPlanApprovalController {
 		}
 		const planModePrompt = prompt.render(planModeApprovedPrompt, {
 			planFilePath,
+			planContent,
 			contextPreserved: option !== "execute",
 		});
+		session.markPlanReferenceSent();
 		this.#dispatchTurn(planModePrompt, { synthetic: true });
 		return { approved: true, dispatched: true };
 	}

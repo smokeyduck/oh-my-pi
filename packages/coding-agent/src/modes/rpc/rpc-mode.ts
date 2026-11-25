@@ -3760,6 +3760,13 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 				if (desktopThinkingEnabled() && command.level === "auto" && !session.getAvailableEffortSelectors().includes("auto")) {
 					return error(id, "set_thinking_level", "This model does not support provider-adaptive reasoning");
 				}
+				if (
+					desktopThinkingEnabled() &&
+					command.level === "off" &&
+					!session.getAvailableEffortSelectors().includes("off")
+				) {
+					return error(id, "set_thinking_level", "This model does not support turning reasoning off");
+				}
 				session.setThinkingLevel(command.level);
 				return success(id, "set_thinking_level", {
 					thinkingLevel: session.thinkingLevel,

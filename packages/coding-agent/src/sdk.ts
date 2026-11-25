@@ -5207,7 +5207,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					omitDemotedReasoning: session?.omitsDemotedReasoning(streamModel) || streamOptions?.omitDemotedReasoning,
 					// The loop can fall back to its initial pin when a live thinking selector
 					// becomes unset. A deliberate desktop default must clear that stale pin.
-					...(desktopSelector === AUTO_THINKING || desktopSelector === "inherit" ? { reasoning: undefined } : {}),
+					...(desktopThinking && session && session.thinkingLevel === undefined ? { reasoning: undefined } : {}),
 					...(desktopSelector === AUTO_THINKING && supportsProviderAdaptiveThinking(streamModel)
 						? { providerAdaptiveReasoning: true }
 						: {}),

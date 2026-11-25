@@ -13,7 +13,11 @@ import {
 } from "@oh-my-pi/pi-ai/providers/anthropic-state";
 import { isFireworksFastModelId } from "@oh-my-pi/pi-catalog/fireworks-model-id";
 import { THINKING_EFFORTS } from "@oh-my-pi/pi-catalog/effort";
-import { getSupportedEfforts, hasVerifiedThinkingControl } from "@oh-my-pi/pi-catalog/model-thinking";
+import {
+	getSupportedEfforts,
+	hasVerifiedThinkingControl,
+	supportsProviderAdaptiveThinking,
+} from "@oh-my-pi/pi-catalog/model-thinking";
 import { modelsAreEqual, routedModelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import { logger } from "@oh-my-pi/pi-utils";
 import { classifyDifficulty } from "../auto-thinking/classifier";
@@ -43,7 +47,7 @@ import {
 	shouldDisableReasoning,
 	toReasoningEffort,
 } from "@oh-my-pi/pi-tui/thinking";
-import { desktopDefaultThinkingSelector, desktopThinkingEnabled, resolveDesktopThinkingLevel } from "./desktop-thinking";
+import { desktopSupportsThinkingOff, desktopThinkingEnabled, resolveDesktopThinkingLevel } from "./desktop-thinking";
 import type { EditModeSetting } from "../edit/settings";
 import type { AgentSessionEvent } from "./agent-session-events";
 import type { ModelCycleResult, ResolvedRoleModel, RoleModelCycle, RoleModelCycleResult } from "./agent-session-types";
@@ -169,6 +173,7 @@ export class ModelControls {
 	/** Hard per-session effort ceiling (e.g. a task spawn's `task.maxEffort` cap); recovery paths re-clamp to it. */
 	readonly #thinkingLevelCeiling: Effort | undefined;
 	readonly #desktopThinking = desktopThinkingEnabled();
+	#desktopThinkingSelection: ConfiguredThinkingLevel | undefined;
 	#autoThinking = false;
 	#autoResolvedLevel: Effort | undefined;
 	#serviceTierByFamily: ServiceTierByFamily;
@@ -224,7 +229,9 @@ export class ModelControls {
 
 	/** Configured selector, including provider adaptation without a concrete effort. */
 	configuredThinkingLevel(): ConfiguredThinkingLevel | undefined {
-		if (this.#desktopThinking) return this.#thinkingLevel ?? desktopDefaultThinkingSelector(this.#model);
+		if (this.#desktopThinking) {
+			return this.#thinkingLevel ?? (supportsProviderAdaptiveThinking(this.#model) ? AUTO_THINKING : undefined);
+		}
 		return this.#autoThinking ? AUTO_THINKING : this.#thinkingLevel;
 	}
 
@@ -263,6 +270,7 @@ export class ModelControls {
 	/** Restores thinking state from a transcript without persisting a new entry. */
 	restoreThinkingLevel(level: ConfiguredThinkingLevel | undefined): void {
 		if (this.#desktopThinking) {
+			this.#desktopThinkingSelection = level;
 			this.#thinkingLevel = resolveDesktopThinkingLevel(this.#model, level, this.#thinkingLevelCeiling);
 			this.#applyThinkingLevelToAgent(this.#thinkingLevel);
 			return;
@@ -566,11 +574,12 @@ export class ModelControls {
 	setThinkingLevel(level: ConfiguredThinkingLevel | undefined, persist: boolean = false): void {
 		if (this.#desktopThinking) {
 			const previousLevel = this.#thinkingLevel;
+			const previousSelection = this.#desktopThinkingSelection;
 			this.restoreThinkingLevel(level);
-			if (previousLevel === this.#thinkingLevel) return;
+			if (previousLevel === this.#thinkingLevel && previousSelection === level) return;
 			const configured = this.configuredThinkingLevel();
 			this.#host.clearInheritedProviderPromptCacheKey();
-			this.#host.sessionManager.appendThinkingLevelChange(this.#thinkingLevel, configured);
+			this.#host.sessionManager.appendThinkingLevelChange(this.#thinkingLevel, level ?? ThinkingLevel.Inherit);
 			if (
 				persist &&
 				this.#thinkingLevel !== undefined &&
@@ -641,7 +650,7 @@ export class ModelControls {
 	 */
 	#reapplyThinkingLevel(fallback?: ThinkingLevel): void {
 		if (this.#desktopThinking) {
-			this.setThinkingLevel(this.#thinkingLevel);
+			this.setThinkingLevel(this.#desktopThinkingSelection);
 			return;
 		}
 		this.setThinkingLevel(
@@ -660,10 +669,10 @@ export class ModelControls {
 				: efforts.filter(level => THINKING_EFFORTS.indexOf(level) <= THINKING_EFFORTS.indexOf(ceiling));
 		if (this.#desktopThinking) {
 			if (efforts.length === 0) return [];
-			const modelDefault = desktopDefaultThinkingSelector(this.#model);
-			return ceiling === undefined && modelDefault !== undefined
-				? [ThinkingLevel.Off, modelDefault, ...selectable]
-				: [ThinkingLevel.Off, ...selectable];
+			const levels: ConfiguredThinkingLevel[] = [];
+			if (desktopSupportsThinkingOff(this.#model)) levels.push(ThinkingLevel.Off);
+			if (ceiling === undefined && supportsProviderAdaptiveThinking(this.#model)) levels.push(AUTO_THINKING);
+			return levels.concat(selectable);
 		}
 		return [ThinkingLevel.Off, AUTO_THINKING, ...selectable];
 	}

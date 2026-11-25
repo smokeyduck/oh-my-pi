@@ -384,10 +384,47 @@ describe("AgentSession role model thinking behavior", () => {
 			expect(session.agent.state.disableReasoning).toBe(false);
 
 			await session.setModelTemporary(fixed, AUTO_THINKING);
-			expect(session.configuredThinkingLevel()).toBe("inherit");
-			expect(session.agent.state.thinkingLevel).toBeUndefined();
+			expect(session.configuredThinkingLevel()).toBe(fixed.thinking?.defaultLevel);
+			expect(session.agent.state.thinkingLevel).toBe(fixed.thinking?.defaultLevel);
 			await session.setModel(adaptive);
 			expect(session.configuredThinkingLevel()).toBe(AUTO_THINKING);
+		} finally {
+			if (previous === undefined) delete process.env.PI_GUI_NATIVE_THINKING;
+			else process.env.PI_GUI_NATIVE_THINKING = previous;
+		}
+	});
+
+	it("uses each desktop model's declared default and never advertises Off for a mandatory route", async () => {
+		const previous = process.env.PI_GUI_NATIVE_THINKING;
+		process.env.PI_GUI_NATIVE_THINKING = "1";
+		try {
+			const base = getAnthropicModelOrThrow("claude-sonnet-4-5");
+			const high = {
+				...base,
+				id: "desktop-high-fixture",
+				thinking: {
+					mode: "budget",
+					efforts: [Effort.Low, Effort.High],
+					defaultLevel: Effort.High,
+					requiresEffort: true,
+				},
+			} as const;
+			const low = {
+				...high,
+				id: "desktop-low-fixture",
+				thinking: { ...high.thinking, defaultLevel: Effort.Low, requiresEffort: false },
+			};
+			await createSession({ initialModelId: base.id, initialThinkingLevel: Effort.High, modelRoles: {} });
+			session.setThinkingLevel("inherit");
+			await session.setModel(high);
+			expect(session.configuredThinkingLevel()).toBe(Effort.High);
+			expect(session.agent.state.thinkingLevel).toBe(Effort.High);
+			expect(session.getAvailableEffortSelectors()).toEqual([Effort.Low, Effort.High]);
+			await session.setModel(low);
+			expect(session.agent.state.thinkingLevel).toBe(Effort.Low);
+			expect(session.getAvailableEffortSelectors()).toContain("off");
+			session.setThinkingLevel("off");
+			expect(session.agent.state.disableReasoning).toBe(true);
 		} finally {
 			if (previous === undefined) delete process.env.PI_GUI_NATIVE_THINKING;
 			else process.env.PI_GUI_NATIVE_THINKING = previous;

@@ -4,8 +4,8 @@ import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import type { Model } from "@oh-my-pi/pi-catalog/types";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { buildRpcModelRoles, rpcModelRoleValue } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-model-roles";
-import type { ModelBrowserRegistry } from "@oh-my-pi/pi-tui/overlays/model-browser";
-import { AUTO_THINKING } from "@oh-my-pi/pi-tui/thinking";
+import type { ModelBrowserRegistry } from "@oh-my-pi/pi-coding-agent/modes/view-model/overlays/model-browser";
+import { AUTO_THINKING } from "@oh-my-pi/pi-coding-agent/thinking/levels";
 
 function chatModel(id: string, reasoning: boolean, thinking?: Model["thinking"]): Model {
 	return { provider: "acme", id, name: id, reasoning, thinking } as unknown as Model;

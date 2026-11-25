@@ -232,7 +232,7 @@ describe("RpcPlanApprovalController", () => {
 		await propose("Reviewed plan");
 		const previousSessionId = session.sessionId;
 		vi.spyOn(session, "newSession").mockResolvedValueOnce(false);
-		const prompt = vi.spyOn(session, "prompt").mockResolvedValue(undefined);
+		const prompt = vi.spyOn(session, "prompt").mockResolvedValue(true);
 
 		await expect(controller.resolve({ approved: true, option: "execute" })).rejects.toThrow("was not started");
 		expect(session.sessionId).toBe(previousSessionId);

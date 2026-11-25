@@ -17,6 +17,9 @@ declare module "bun:jsc" {
 		}>;
 	}
 
+	/** Starts sampling with an optional period in microseconds. */
+	function startSamplingProfiler(optionalDirectory: string | undefined, intervalUs: number): void;
+
 	/** Returns the samples recorded since the previous call and clears the profiler's buffer. */
 	function samplingProfilerStackTraces(): SamplingProfileStackTraces;
 }

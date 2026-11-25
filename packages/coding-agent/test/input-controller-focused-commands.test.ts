@@ -119,7 +119,9 @@ describe("focused subagent view slash commands", () => {
 		Object.assign(focused.raw, { isBtwFocused: true, submitBtwFollowUp });
 		const controller = new InputController(focused.ctx);
 		controller.setupEditorSubmitHandler();
-		await focused.ctx.editor.onSubmit?.("explain the approach");
+		focused.editor.setText("explain the approach");
+		focused.editor.submit();
+		await controller.waitForSubmissionDispatches();
 
 		expect(submitBtwFollowUp).toHaveBeenCalledWith("explain the approach", undefined);
 		expect(focused.prompt).not.toHaveBeenCalled();
@@ -131,7 +133,9 @@ describe("focused subagent view slash commands", () => {
 		Object.assign(focused.raw, { isBtwFocused: true, submitBtwFollowUp });
 		const controller = new InputController(focused.ctx);
 		controller.setupEditorSubmitHandler();
-		await focused.ctx.editor.onSubmit?.("=> check the result");
+		focused.editor.setText("=> check the result");
+		focused.editor.submit();
+		await controller.waitForSubmissionDispatches();
 
 		expect(focused.prompt).toHaveBeenCalledWith("check the result", {
 			streamingBehavior: "followUp",

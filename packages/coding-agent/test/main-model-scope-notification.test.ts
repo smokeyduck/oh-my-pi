@@ -168,7 +168,7 @@ describe("startup model fallback notice after first-run setup", () => {
 			mode = this;
 			throw interrupted;
 		});
-		spyOn(ModelRegistry.prototype, "refreshInBackground").mockImplementation(() => {});
+		spyOn(ModelRegistry.prototype, "refreshInBackground").mockResolvedValue(undefined);
 		spyOn(pluginHelpers, "preloadPluginRoots").mockResolvedValue(undefined);
 		beginStartupComposer({
 			driver: memoryTerminal({ columns: 80, rows: 24 }).options,

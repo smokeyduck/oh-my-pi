@@ -15579,8 +15579,8 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			const restoredConfigured = sessionContext.configuredThinkingLevel;
 			const restoredThinkingLevel: ConfiguredThinkingLevel | undefined =
 				hasThinkingEntry || (defaultThinkingLevel === AUTO_THINKING && sessionContext.thinkingLevel !== "off")
-					? restoredConfigured === AUTO_THINKING
-						? AUTO_THINKING
+					? restoredConfigured === AUTO_THINKING || (desktopThinkingEnabled() && restoredConfigured === "inherit")
+						? restoredConfigured
 						: (sessionContext.thinkingLevel as ThinkingLevel | undefined)
 					: defaultThinkingLevel;
 			this.#models.restoreThinkingLevel(restoredThinkingLevel);

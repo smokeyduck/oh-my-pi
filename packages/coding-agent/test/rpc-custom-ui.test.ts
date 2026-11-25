@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
+import type { ExtensionRows } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/render-types";
 import { showHostedComponent } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-custom-ui";
 import { RpcTerminalHost } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-terminal";
 import type {
@@ -6,7 +7,6 @@ import type {
 	RpcTerminalOpenedFrame,
 	RpcTerminalOutputFrame,
 } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-types";
-import type { Component } from "@oh-my-pi/pi-tui";
 
 let host: RpcTerminalHost | undefined;
 
@@ -46,11 +46,10 @@ function screenText(frames: RpcTerminalFrame[], terminalId: string): string {
 		.join("");
 }
 
-/** A component that paints one line and finishes with the first key it receives. */
-function echoComponent(done: (key: string) => void, disposed: string[]): Component & { dispose(): void } {
+/** A rows view that paints one line and finishes with the first key it receives. */
+function echoComponent(done: (key: string) => void, disposed: string[]): ExtensionRows {
 	return {
 		render: () => ["hosted-marker"],
-		invalidate: () => {},
 		handleInput: (data: string) => done(data),
 		dispose: () => disposed.push("disposed"),
 	};
@@ -60,9 +59,10 @@ describe("showHostedComponent", () => {
 	it("paints the component into a revealed virtual terminal and resolves with the value it reports", async () => {
 		const { host, frames } = createHost();
 		const disposed: string[] = [];
-		const result = showHostedComponent<string>(host, "Extension", (_tui, _theme, _keys, done) =>
-			echoComponent(done, disposed),
-		);
+		const result = showHostedComponent<string>(host, "Extension", (ui, _theme, _keys, done) => ({
+			...echoComponent(done, disposed),
+			render: () => [`hosted-marker ${ui.size().columns}x${ui.size().rows}`],
+		}));
 		const frame = opened(frames);
 		expect(frame.reveal).toBe(true);
 		expect(frame.terminal).toMatchObject({ kind: "command", title: "Extension", running: true });
@@ -70,6 +70,7 @@ describe("showHostedComponent", () => {
 		await waitFor(() => screenText(frames, terminalId).includes("hosted-marker"), "component paint");
 
 		host.resize(terminalId, 60, 12);
+		await waitFor(() => screenText(frames, terminalId).includes("60x12"), "resized component paint");
 		host.input(terminalId, "y");
 		expect(await result).toBe("y");
 		expect(disposed).toEqual(["disposed"]);
@@ -102,6 +103,21 @@ describe("showHostedComponent", () => {
 		await expect(result).rejects.toThrow("factory failed");
 		const { terminalId } = opened(frames).terminal;
 		expect(host.get(terminalId)?.running).toBe(false);
+	});
+
+	it("discards a rows view that resolves after the terminal has been aborted", async () => {
+		const { host, frames } = createHost();
+		const controller = new AbortController();
+		const disposed = Promise.withResolvers<void>();
+		const pending = Promise.withResolvers<ExtensionRows>();
+		const result = showHostedComponent<string>(host, "Extension", () => pending.promise, { signal: controller.signal });
+		const { terminalId } = opened(frames).terminal;
+		controller.abort(new Error("gone"));
+		await expect(result).rejects.toThrow("gone");
+		pending.resolve({ render: () => ["must-not-paint"], dispose: () => disposed.resolve() });
+		await disposed.promise;
+		expect(host.get(terminalId)?.running).toBe(false);
+		expect(screenText(frames, terminalId)).not.toContain("must-not-paint");
 	});
 
 	it("rejects without opening a terminal when the signal is already aborted", async () => {

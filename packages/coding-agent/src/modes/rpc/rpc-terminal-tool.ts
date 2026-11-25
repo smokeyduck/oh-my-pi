@@ -8,9 +8,9 @@
 import * as path from "node:path";
 import { type } from "@oh-my-pi/omptype";
 import type { AgentTool, AgentToolResult, ToolApproval, ToolApprovalDecision } from "@oh-my-pi/pi-agent-core";
-import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import terminalDescription from "../../prompts/tools/terminal.md" with { type: "text" };
 import { truncateForPrompt } from "../../tools/approval";
+import { ToolError } from "../../tools/tool-errors";
 import {
 	type BackgroundCommandRequest,
 	type RpcTerminalHost,

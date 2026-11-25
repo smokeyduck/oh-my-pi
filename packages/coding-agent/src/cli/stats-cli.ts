@@ -4,14 +4,14 @@
  * Handles `omp stats` subcommand for viewing AI usage statistics.
  */
 
-import { formatKeyHint } from "@oh-my-pi/pi-tui/key-hint-format";
-import { truncateToWidth } from "@oh-my-pi/pi-tui/utils";
 import { $env, postmortem } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import { openStandaloneJudge } from "../judgment/standalone";
 import { startParentWatchdog } from "../subprocess/parent-watchdog";
 import { openTernPage } from "../tools/browser/tern/user-page";
+import { formatKeyHint } from "../ui/keys/hints";
 import { openPath } from "../utils/open";
+import { truncateToWidth } from "../utils/text-width";
 
 const REUSED_DASHBOARD_POLL_MS = 2_000;
 

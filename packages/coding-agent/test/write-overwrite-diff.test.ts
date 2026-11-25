@@ -5,7 +5,8 @@ import * as path from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import * as lsp from "@oh-my-pi/pi-coding-agent/lsp";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import { WriteTool, type WriteToolDetails } from "@oh-my-pi/pi-coding-agent/tools/write";
+import type { WriteToolDetails } from "@oh-my-pi/pi-coding-agent/tools/details/write";
+import { WriteTool } from "@oh-my-pi/pi-coding-agent/tools/write";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
 function createSession(cwd: string): ToolSession {

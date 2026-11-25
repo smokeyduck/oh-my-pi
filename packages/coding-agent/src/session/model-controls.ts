@@ -33,20 +33,20 @@ import {
 } from "../config/model-resolver";
 import { buildServiceTierByFamily } from "../config/service-tier";
 import type { Settings } from "../config/settings";
-import { containsMagicKeyword } from "@oh-my-pi/pi-tui/prompt/magic-keywords";
-import type { ModelRoleLookup } from "@oh-my-pi/pi-tui/overlays/model-browser";
+import { containsMagicKeyword } from "./magic-keywords";
+import type { ModelRoleLookup } from "../modes/view-model/overlays/model-browser";
 import type { MagicKeywordId } from "../modes/magic-keywords";
 import {
 	AUTO_THINKING,
 	automaticThinkingLevel,
-	type ConfiguredThinkingLevel,
 	clampAutoThinkingEffort,
 	clampThinkingLevelToCeiling,
 	resolveProvisionalAutoLevel,
 	resolveThinkingLevelForModel,
 	shouldDisableReasoning,
 	toReasoningEffort,
-} from "@oh-my-pi/pi-tui/thinking";
+} from "../thinking/levels";
+import type { ConfiguredThinkingLevel } from "../utils/render-utils";
 import { desktopSupportsThinkingOff, desktopThinkingEnabled, resolveDesktopThinkingLevel } from "./desktop-thinking";
 import type { EditModeSetting } from "../edit/settings";
 import type { AgentSessionEvent } from "./agent-session-events";
@@ -235,6 +235,13 @@ export class ModelControls {
 		return this.#autoThinking ? AUTO_THINKING : this.#thinkingLevel;
 	}
 
+	/** Keep the desktop preference even when the current model clamps or cannot apply it. */
+	thinkingLevelForRestore(): ConfiguredThinkingLevel | undefined {
+		return this.#desktopThinking
+			? (this.#desktopThinkingSelection ?? ThinkingLevel.Inherit)
+			: this.configuredThinkingLevel();
+	}
+
 	/** Whether per-turn automatic thinking classification is enabled. */
 	get isAutoThinking(): boolean {
 		return this.#autoThinking;
@@ -292,7 +299,13 @@ export class ModelControls {
 	}
 
 	/** Restores an exact thinking snapshot after a failed session switch. */
-	restoreThinkingSnapshot(level: ThinkingLevel | undefined, auto: boolean, resolved: Effort | undefined): void {
+	restoreThinkingSnapshot(
+		level: ThinkingLevel | undefined,
+		auto: boolean,
+		resolved: Effort | undefined,
+		configured: ConfiguredThinkingLevel | undefined,
+	): void {
+		if (this.#desktopThinking) this.#desktopThinkingSelection = configured;
 		this.#thinkingLevel = level;
 		this.#autoThinking = auto;
 		this.#autoResolvedLevel = resolved;
@@ -362,7 +375,7 @@ export class ModelControls {
 	async setModelTemporary(
 		model: Model,
 		thinkingLevel?: ConfiguredThinkingLevel,
-		options?: { ephemeral?: boolean; prewalk?: boolean },
+		options?: { ephemeral?: boolean; prewalk?: boolean; metadataResolved?: boolean },
 		selection: "explicit" | "automatic" = "explicit",
 		isCurrent?: () => boolean,
 	): Promise<boolean> {
@@ -371,7 +384,10 @@ export class ModelControls {
 			throw new Error(`No API key for ${model.provider}/${model.id}`);
 		}
 
-		const targetModel = await this.#host.modelRegistry.refreshSelectedModelMetadata(model);
+		// A caller that loaded the metadata ahead of time (auto-prewalk, while its judge ran) skips the second probe.
+		const targetModel = options?.metadataResolved
+			? model
+			: await this.#host.modelRegistry.refreshSelectedModelMetadata(model);
 		if (isCurrent?.() === false) return false;
 
 		this.#host.modelRegistry.clearSuppressedSelector(formatModelStringWithRouting(targetModel));
@@ -512,8 +528,9 @@ export class ModelControls {
 		this.#host.sessionManager.appendModelChange(formatModelStringWithRouting(next.model));
 		this.#host.settings.getStorage()?.recordModelUsage(`${next.model.provider}/${next.model.id}`);
 
-		// Apply the scoped model's configured thinking level, preserving auto.
-		this.setThinkingLevel(this.#autoThinking ? AUTO_THINKING : next.thinkingLevel);
+		// An explicit scoped suffix wins; a bare desktop model keeps the user's selection.
+		if (this.#desktopThinking && next.thinkingLevel === undefined) this.#reapplyThinkingLevel();
+		else this.setThinkingLevel(this.#autoThinking ? AUTO_THINKING : next.thinkingLevel);
 		await this.#host.syncAfterModelChange(previousEditMode);
 
 		return { model: next.model, thinkingLevel: this.thinkingLevel, isScoped: true };
@@ -753,8 +770,11 @@ export class ModelControls {
 			}
 		}
 
-		// Drop the result if the turn was aborted/superseded while classifying.
-		if (this.#host.promptGeneration() !== generation || !this.#autoThinking) return;
+		// Drop the result if the turn was aborted/superseded while classifying, or if another model was
+		// selected meanwhile: the classifier chose from this model's levels.
+		if (this.#host.promptGeneration() !== generation || !this.#autoThinking || !modelsAreEqual(this.#model, model)) {
+			return;
+		}
 
 		const effort = clampThinkingLevelToCeiling(
 			model,

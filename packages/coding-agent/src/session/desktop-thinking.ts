@@ -5,13 +5,9 @@ import {
 	hasVerifiedThinkingControl,
 	supportsProviderAdaptiveThinking,
 } from "@oh-my-pi/pi-catalog/model-thinking";
-import {
-	AUTO_THINKING,
-	type ConfiguredThinkingLevel,
-	clampThinkingLevelToCeiling,
-	resolveThinkingLevelForModel,
-} from "@oh-my-pi/pi-tui/thinking";
 import type { Settings } from "../config/settings";
+import { AUTO_THINKING, clampThinkingLevelToCeiling, resolveThinkingLevelForModel } from "../thinking/levels";
+import type { ConfiguredThinkingLevel } from "../utils/render-utils";
 import { cfgDefaultThinkingLevel } from "./settings";
 
 /** The GUI uses `auto` for provider adaptation, never for the CLI classifier. */

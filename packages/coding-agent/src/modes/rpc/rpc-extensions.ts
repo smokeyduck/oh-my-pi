@@ -6,12 +6,13 @@
 import { resolveUsedFraction, type UsageReport } from "@oh-my-pi/pi-ai";
 import { listProvidersWithEnvKey } from "@oh-my-pi/pi-ai/env-api-key";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
-import type { Settings } from "../../config/settings";
 import { orderedSettings } from "../../config/all-settings";
 import { cfgDisabledProviders } from "../../config/model-settings";
 import { lookup as lookupSetting } from "../../config/registry";
-import { SETTING_TABS, TAB_GROUPS, TAB_METADATA } from "@oh-my-pi/pi-tui/overlays/settings-defs";
+import type { Settings } from "../../config/settings";
+import { SETTING_TABS, TAB_GROUPS } from "../../config/settings-defs";
 import type { AgentSession } from "../../session/agent-session";
+import { SETTINGS_PAGES } from "../../ui/overlays/settings/pages";
 import type {
 	RpcProviderInfo,
 	RpcSettingEntry,
@@ -134,7 +135,7 @@ export function buildRpcSettingsSchema(settings: Settings): RpcSettingsSchemaRes
 
 	const tabs = SETTING_TABS.map(tab => ({
 		id: tab,
-		label: TAB_METADATA[tab].label,
+		label: SETTINGS_PAGES[tab].label,
 		groups: [...TAB_GROUPS[tab]],
 	}));
 

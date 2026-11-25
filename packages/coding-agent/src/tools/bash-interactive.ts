@@ -1,18 +1,19 @@
-import { BashInteractiveOverlayComponent } from "@oh-my-pi/pi-tui/tools/bash-interactive";
 import type { AgentToolContext } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { type PtyRunResult, PtySession } from "@oh-my-pi/pi-natives";
-import { TERMINAL } from "@oh-my-pi/pi-tui";
-import { loadXtermTerminal } from "@oh-my-pi/pi-tui/tools/terminal-output";
 import { Settings } from "../config/settings";
 import { buildNonInteractiveEnv } from "../exec/non-interactive-env";
 import { cfgPtyNotify } from "../modes/settings";
-import { type ArtifactAllocator, OutputSink, type OutputSummary } from "@oh-my-pi/pi-tui/tools/streaming-output";
+import { type ArtifactAllocator, OutputSink, type OutputSummary } from "./streaming-output";
 import { StreamNewlineNormalizer } from "../utils/stream-newlines";
 import { holdBlockedStatus } from "../utils/run-status";
 import { TerminalGraphicsDecoder } from "../utils/terminal-graphics";
 import { appendImageLinks } from "../utils/image-temp";
 import { resolveOutputMaxColumns, resolveOutputSinkArtifactMaxBytes, resolveOutputSinkHeadBytes } from "./output-meta";
+import { createRoot, effect, nativeRendering, untrack } from "@oh-my-pi/pi-tui";
+import { notifyTerminal } from "@oh-my-pi/pi-tui/driver/session";
+import { CONSOLE_SHEET, PtyConsole, PtyConsoleModel } from "../ui/overlays/panels/pty-console";
+import { sheetView } from "../ui/overlays/sheet";
 
 export interface BashInteractiveResult extends OutputSummary {
 	exitCode: number | undefined;
@@ -67,14 +68,14 @@ class InputWaitWatch {
 	readonly #command: string;
 	readonly #settings: Settings;
 	readonly #session: PtySession;
-	readonly #screen: BashInteractiveOverlayComponent;
+	readonly #screen: PtyConsoleModel;
 	readonly #timer: NodeJS.Timeout;
 	#lastOutput = Date.now();
 	#lastInput = 0;
 	#streak = 0;
 	#release: (() => void) | undefined;
 
-	constructor(command: string, settings: Settings, session: PtySession, screen: BashInteractiveOverlayComponent) {
+	constructor(command: string, settings: Settings, session: PtySession, screen: PtyConsoleModel) {
 		this.#command = command;
 		this.#settings = settings;
 		this.#session = session;
@@ -115,7 +116,7 @@ class InputWaitWatch {
 		this.#release = holdBlockedStatus({ state: "blocked", kind: "question", msg: `Console: ${this.#command}` });
 		if (Date.now() - this.#lastInput < USER_PRESENT_MS) return;
 		if (cfgPtyNotify.get(this.#settings) === "off") return;
-		TERMINAL.sendNotification({
+		notifyTerminal({
 			title: "omp",
 			body: "Console waiting for input",
 			type: "console",
@@ -178,6 +179,8 @@ export async function runInteractiveBashPty(
 		};
 	};
 	let watch: InputWaitWatch | undefined;
+	let stopFitting: (() => void) | undefined;
+	let consoleModel: PtyConsoleModel | undefined;
 	try {
 		const host = ui.supportsCustom === true ? undefined : ui.interactiveTerminal;
 		if (host) {
@@ -195,36 +198,20 @@ export async function runInteractiveBashPty(
 			);
 			return await summarize(run);
 		}
-		// Load the xterm Terminal ctor here (async boundary) — the ui.custom factory below is sync.
-		const XtermTerminal = await loadXtermTerminal();
 		const result = await ui.custom<BashInteractiveResult>(
-			(tui, uiTheme, _keybindings, done) => {
+			(host, _theme, _keybindings, done) => {
 				const session = new PtySession();
-				const component = new BashInteractiveOverlayComponent(
-					options.command,
-					uiTheme,
-					() => tui.terminal.rows,
-					XtermTerminal,
-					{ resize: (columns, rows) => session.resize(columns, rows) },
-				);
-				let finished = false;
-				const finalize = (run: PtyRunResult) => {
-					if (finished) return;
-					finished = true;
-					watch?.stop();
-					component.setComplete({ exitCode: run.exitCode, cancelled: run.cancelled, timedOut: run.timedOut });
-					tui.requestRender();
-					void (async () => {
-						await component.flushOutput();
-						done(await summarize(run));
-					})();
+				const kill = (): void => {
+					try {
+						session.kill();
+					} catch {
+						// ignore
+					}
 				};
-				const cols = Math.max(20, tui.terminal.columns - 2);
-				const rows = Math.max(5, tui.terminal.rows - 4);
-				const inputWatch = new InputWaitWatch(options.command, settings, session, component);
-				watch = inputWatch;
-				component.setHandlers(
-					data => {
+				const size = untrack(() => host.size());
+				const grid = PtyConsoleModel.gridFor(size.columns, size.rows);
+				const model = new PtyConsoleModel(options.command, grid, {
+					onInput: data => {
 						inputWatch.input();
 						try {
 							session.write(data);
@@ -232,21 +219,34 @@ export async function runInteractiveBashPty(
 							// ignore writes after command exits
 						}
 					},
-					() => {
-						try {
-							session.kill();
-						} catch {
-							// ignore
-						}
-					},
-					() => {
-						try {
-							session.kill();
-						} catch {
-							// ignore
-						}
-					},
-				);
+					onKill: kill,
+					onResize: (cols, rows) => session.resize(cols, rows),
+				});
+				consoleModel = model;
+				stopFitting = createRoot(dispose => {
+					effect(() => {
+						const next = host.size();
+						untrack(() => model.fit(next.columns, next.rows));
+					});
+					return dispose;
+				});
+				let finished = false;
+				const finalize = (run: PtyRunResult) => {
+					if (finished) return;
+					finished = true;
+					watch?.stop();
+					model.complete({
+						exitCode: run.exitCode,
+						cancelled: run.cancelled,
+						timedOut: run.timedOut,
+					});
+					void (async () => {
+						await model.flush();
+						done(await summarize(run));
+					})();
+				};
+				const inputWatch = new InputWaitWatch(options.command, settings, session, model);
+				watch = inputWatch;
 				void session
 					.startArgv(
 						{
@@ -256,15 +256,14 @@ export async function runInteractiveBashPty(
 							timeoutMs: options.timeoutMs,
 							env: interactivePtyEnv(options.env),
 							signal: options.signal,
-							cols,
-							rows,
+							cols: grid.cols,
+							rows: grid.rows,
 						},
 						(err, chunk) => {
 							if (finished || err || !chunk) return;
 							inputWatch.output();
-							component.appendOutput(chunk);
+							model.append(chunk);
 							record(chunk);
-							tui.requestRender();
 						},
 						(err, pid) => {
 							if (!err) options.onStart?.(pid);
@@ -275,7 +274,7 @@ export async function runInteractiveBashPty(
 						sink.push(`PTY error: ${error instanceof Error ? error.message : String(error)}\n`);
 						finalize({ exitCode: undefined, cancelled: false, timedOut: false });
 					});
-				return component;
+				return sheetView(nativeRendering(), CONSOLE_SHEET, PtyConsole({ model }));
 			},
 			{ overlay: true },
 		);
@@ -285,6 +284,8 @@ export async function runInteractiveBashPty(
 		return result;
 	} finally {
 		watch?.stop();
+		stopFitting?.();
+		consoleModel?.dispose();
 		await sink.dispose();
 	}
 }

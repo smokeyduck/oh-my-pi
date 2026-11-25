@@ -14,13 +14,70 @@
  * silently reporting a successful no-op navigation (review on #5895).
  */
 import { beforeAll, describe, expect, it, vi } from "bun:test";
-import { AgentBusyError, type AgentToolResult } from "@oh-my-pi/pi-agent-core";
+import { Agent, AgentBusyError, type AgentToolResult } from "@oh-my-pi/pi-agent-core";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { ExtensionRunner, ExtensionUIContext } from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
 import { SecretObfuscator } from "@oh-my-pi/pi-coding-agent/secrets/obfuscator";
-import { initTheme } from "@oh-my-pi/pi-tui/theme";
-import type { AskToolDetails } from "@oh-my-pi/pi-tui/tools/ask";
+import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import type { AskToolDetails } from "@oh-my-pi/pi-coding-agent/tools/details/ask";
 import { applyRpcSwitchLeaf } from "../src/modes/rpc/rpc-session-extra";
-import { assistantMsg, createTestSession, userMsg } from "./utilities";
+import { ensureTheme } from "../src/ui/theme/service";
+
+const TEST_MODEL = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+
+async function createTestSession(
+	options: { inMemory?: boolean; extensionRunner?: ExtensionRunner; obfuscator?: SecretObfuscator } = {},
+) {
+	const sessionManager = SessionManager.inMemory();
+	const settings = Settings.isolated();
+	const modelRegistry = {} as never;
+	const session = new AgentSession({
+		agent: new Agent({
+			getApiKey: () => "test-key",
+			initialState: {
+				model: TEST_MODEL,
+				systemPrompt: ["test"],
+				tools: [],
+			},
+		}),
+		sessionManager,
+		settings,
+		modelRegistry,
+		extensionRunner: options.extensionRunner,
+		obfuscator: options.obfuscator,
+	});
+	return {
+		session,
+		sessionManager,
+		cleanup: () => session.dispose(),
+	};
+}
+
+function userMsg(text: string) {
+	return { role: "user" as const, content: text, timestamp: Date.now() };
+}
+
+function assistantMsg(text: string) {
+	return {
+		role: "assistant" as const,
+		content: [{ type: "text" as const, text }],
+		api: "anthropic-messages" as const,
+		provider: "anthropic",
+		model: "test",
+		usage: {
+			input: 1,
+			output: 1,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 2,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		},
+		stopReason: "stop" as const,
+		timestamp: Date.now(),
+	};
+}
 
 const ORIGINAL_HTML = `<form>
   <fieldset>
@@ -573,11 +630,48 @@ describe("AgentSession tree navigation onto an ask toolResult", () => {
 	});
 });
 
+describe("AgentSession tree rewind", () => {
+	it("returns a user prompt at the active leaf for editing and keeps the stored branch", async () => {
+		const { session, sessionManager, cleanup } = await createTestSession();
+		try {
+			const parentId = sessionManager.appendMessage(assistantMsg("Ready"));
+			const leafId = sessionManager.appendMessage(userMsg("Change the plan"));
+
+			const result = await session.navigateTree(leafId);
+
+			expect(result).toMatchObject({ cancelled: false, editorText: "Change the plan" });
+			expect(sessionManager.getLeafId()).toBe(parentId);
+			expect(sessionManager.getEntry(leafId)).toMatchObject({ parentId });
+		} finally {
+			await cleanup();
+		}
+	});
+
+	it("restores only the plan approval on the active branch", async () => {
+		const { session, sessionManager, cleanup } = await createTestSession();
+		try {
+			const beforeApproval = sessionManager.appendMessage(assistantMsg("Proposed plan"));
+			const planFilePath = "local://approved-plan.md";
+			sessionManager.appendModeChange("none", { approvedPlanFilePath: planFilePath });
+			const afterApproval = sessionManager.appendMessage(assistantMsg("Approved"));
+			session.setPlanReferencePath(planFilePath);
+
+			await session.navigateTree(beforeApproval);
+			expect(session.getApprovedPlanReferencePath()).toBeUndefined();
+			expect(session.getPlanReferencePath()).toBe("local://PLAN.md");
+
+			await session.navigateTree(afterApproval);
+			expect(session.getApprovedPlanReferencePath()).toBe(planFilePath);
+			expect(session.getPlanReferencePath()).toBe(planFilePath);
+		} finally {
+			await cleanup();
+		}
+	});
+});
+
 describe("RPC switch_leaf ask re-answer", () => {
 	// The ask tool labels its rows from the theme; main.ts sets it up before any mode runs.
-	beforeAll(async () => {
-		await initTheme(false);
-	});
+	beforeAll(ensureTheme);
 
 	it("opens the remote ask dialog, commits a sibling answer, and defers resume", async () => {
 		const ctx = await createTestSession({ inMemory: true });

@@ -1,7 +1,6 @@
 import type { ExtensionUIContext } from "../../extensibility/extensions";
 import type { AgentSession } from "../../session/agent-session";
 import { OmfgController } from "../controllers/omfg-controller";
-import type { InteractiveModeContext } from "../types";
 
 export interface RpcOmfgResult {
 	state: "saved" | "rejected" | "aborted";
@@ -15,12 +14,10 @@ export async function runRpcOmfg(
 	complaint: string,
 ): Promise<RpcOmfgResult> {
 	let diagnostic = "Unable to create TTSR rule.";
-	const context = {
+	const context: ConstructorParameters<typeof OmfgController>[0] = {
 		session,
 		sessionManager: session.sessionManager,
 		settings: session.settings,
-		ui: { requestRender: () => {} },
-		omfgContainer: { clear: () => {}, addChild: () => {} },
 		showStatus: (message: string) => {
 			diagnostic = message;
 		},
@@ -30,7 +27,7 @@ export async function runRpcOmfg(
 		showHookConfirm: (title: string, message: string) => ui.confirm(title, message),
 		showHookSelector: (title: string, options: string[]) => ui.select(title, options),
 		showHookInput: (title: string, placeholder?: string) => ui.input(title, placeholder),
-	} as unknown as InteractiveModeContext;
+	};
 	const result = await new OmfgController(context).startAndWait(complaint);
 	if (!result) throw new Error(diagnostic);
 	if (result.state === "error") throw new Error(result.errorMessage ?? diagnostic);

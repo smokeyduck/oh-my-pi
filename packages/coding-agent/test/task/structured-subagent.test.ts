@@ -50,7 +50,7 @@ import {
 	type StructuredSubagentRequest,
 } from "@oh-my-pi/pi-coding-agent/task/structured-subagent";
 import type { AgentDefinition } from "@oh-my-pi/pi-coding-agent/task/types";
-import type { SingleResult, TaskParams } from "@oh-my-pi/pi-tui/tools/task";
+import type { SingleResult, TaskParams } from "@oh-my-pi/pi-coding-agent/task/task-details";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { __resetDirsFromEnvForTests, removeWithRetries, setAgentDir, TempDir } from "@oh-my-pi/pi-utils";
 import { createInMemoryAuthStorage } from "../helpers/agent-session-setup";
@@ -484,6 +484,22 @@ describe("structured subagent primitive", () => {
 		await fs.rm(inline.artifactsDir, { recursive: true, force: true });
 		await fs.rm(detached.artifactsDir, { recursive: true, force: true });
 	});
+	it("sends a lone step verbatim without stepping, but steps several", async () => {
+		mockDiscovery();
+		const dispatched: executorModule.ExecutorOptions[] = [];
+		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
+			dispatched.push(options);
+			return result();
+		});
+
+		await runStructuredSubagent(request({ steps: ["# Target\r\nsrc/a.ts\n"] }));
+		await runStructuredSubagent(request({ steps: ["Add the parser.", "Wire it in."] }));
+
+		expect(dispatched[0]?.task).toBe("# Target\nsrc/a.ts");
+		expect(dispatched[0]?.steps).toBeUndefined();
+		expect(dispatched[1]?.steps).toHaveLength(2);
+	});
+
 	it("propagates a custom thinking-suffixed role alias through policy, dispatch, and settlement", async () => {
 		const customAgent = { ...AGENT, model: ["@reviewer:high"] };
 		mockDiscovery(customAgent);

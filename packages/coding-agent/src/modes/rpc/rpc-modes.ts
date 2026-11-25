@@ -1,4 +1,3 @@
-import type { LoopLimitRuntime } from "@oh-my-pi/pi-tui/status-line/loop";
 /**
  * Session-mode controllers for RPC mode (vibe / goal / loop).
  *
@@ -19,6 +18,7 @@ import guidedGoalInterviewPrompt from "../../prompts/goals/guided-goal-interview
 import type { AgentSession, AgentSessionEvent } from "../../session/agent-session";
 import { type VibeOwnerScope, type VibeParentSession, VibeSessionRegistry } from "../../vibe/runtime";
 import { consumeLoopLimitIteration, createLoopLimitRuntime, isLoopDurationExpired, parseLoopArgs } from "../loop-limit";
+import type { LoopLimitRuntime } from "../view-model/status-line/loop";
 import type { RpcGoalState, RpcLoopModeState, RpcLoopModeUpdateFrame, RpcVibeModeState } from "./rpc-types";
 
 // ============================================================================

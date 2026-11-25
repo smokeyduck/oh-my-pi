@@ -3,26 +3,23 @@
  * on its own screen) and RPC hosts (a hosted terminal view).
  */
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
-import type { TUI } from "@oh-my-pi/pi-tui";
-import {
-	type AdvisorConfigDeps,
-	AdvisorConfigOverlayComponent,
-	type AdvisorConfigScope,
-} from "@oh-my-pi/pi-tui/overlays/advisor-config";
-import { collapseSharedUsageReports } from "@oh-my-pi/pi-tui/overlays/usage-display";
-import { sanitizeDisplayWarnings } from "@oh-my-pi/pi-tui/render/render-utils";
 import { getAgentDir, getProjectDir } from "@oh-my-pi/pi-utils";
+import type { AdvisorConfigScope } from "../advisor/advisor-config-types";
+import { ADVISOR_DEFAULT_TOOL_NAMES } from "../advisor/advise-tool";
 import {
-	ADVISOR_DEFAULT_TOOL_NAMES,
 	discoverAdvisorConfigs,
 	loadWatchdogConfigFile,
 	resolveAdvisorConfigEditPath,
 	saveWatchdogConfigFile,
-} from "../advisor";
+} from "../advisor/config";
 import { cfgAdvisorSyncBacklog } from "../advisor/settings";
 import { resolveAdvisorRoleSelection } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
 import type { AgentSession } from "../session/agent-session";
+import { collapseSharedUsageReports } from "../session/usage-display";
+import type { AdvisorConfigOverlayProps } from "../ui/overlays/advisor-config/advisor-config";
+import type { AdvisorConfigCallbacks, AdvisorConfigDeps } from "../ui/overlays/advisor-config/model";
+import { sanitizeDisplayWarnings } from "../utils/render-utils";
 import { limitMatchesActiveAccount } from "../slash-commands/helpers/active-oauth-account";
 import { getEditorCommand, openInEditor } from "../utils/external-editor";
 import { createModelBrowserSource } from "./model-browser-source";
@@ -36,15 +33,13 @@ export interface AdvisorConfigOverlayHost {
 	warn(message: string): void;
 	/** The live advisor roster changed (a status line advisor badge must repaint). */
 	advisorsChanged(): void;
-	requestRender(): void;
 }
 
 /** Load the project WATCHDOG.yml and build its editor; `close` runs when the user leaves it. */
 export async function createAdvisorConfigOverlay(
-	ui: TUI,
 	host: AdvisorConfigOverlayHost,
 	close: () => void,
-): Promise<AdvisorConfigOverlayComponent> {
+): Promise<AdvisorConfigOverlayProps> {
 	const { session, settings, cwd } = host;
 	const agentDir = getAgentDir() ?? getProjectDir();
 	const initialScope: AdvisorConfigScope = "project";
@@ -66,7 +61,7 @@ export async function createAdvisorConfigOverlay(
 	const defaultAdvisorModel = resolveAdvisorRoleSelection(settings, session.modelRegistry.getAvailable())?.model;
 	const deps: AdvisorConfigDeps = {
 		getAvailableModels: () => session.modelRegistry.getAvailable(),
-		browserSource: createModelBrowserSource(settings, model => session.effectiveServiceTier(model)),
+		mruOrder: createModelBrowserSource(settings).mruOrder,
 		defaultToolNames: ADVISOR_DEFAULT_TOOL_NAMES,
 		externalEditor: text => {
 			const command = getEditorCommand();
@@ -77,7 +72,7 @@ export async function createAdvisorConfigOverlay(
 		syncBacklog: cfgAdvisorSyncBacklog.get(settings),
 		defaultModelLabel: defaultAdvisorModel ? `${defaultAdvisorModel.provider}/${defaultAdvisorModel.id}` : undefined,
 	};
-	return new AdvisorConfigOverlayComponent(ui, deps, initialScope, initialDoc, {
+	const callbacks: AdvisorConfigCallbacks = {
 		loadDoc: async scope => loadWatchdogConfigFile(await resolveAdvisorConfigEditPath(scope, dirs)),
 		save: async (scope, doc) => {
 			await saveWatchdogConfigFile(await resolveAdvisorConfigEditPath(scope, dirs), doc);
@@ -98,15 +93,13 @@ export async function createAdvisorConfigOverlay(
 					? `Saved ${scope} WATCHDOG.yml — ${count} advisor${count === 1 ? "" : "s"} active.`
 					: `Saved ${scope} WATCHDOG.yml. Run /advisor on to activate the configured advisors.`,
 			);
-			host.requestRender();
 		},
 		close,
-		requestRender: () => host.requestRender(),
 		notify: message => host.status(message),
 		// Scope switches happen inside the overlay; the initial file's warnings
 		// were already reported above, so only newly activated files arrive here.
 		warn: message => host.warn(message),
-		getAdvisorStats: () => session.getAdvisorStats().advisors,
+		stats: () => session.getAdvisorStats().advisors,
 		getUsageReports: async () => {
 			const reports = await session.fetchUsageReports?.();
 			return reports ? collapseSharedUsageReports(reports) : null;
@@ -115,5 +108,6 @@ export async function createAdvisorConfigOverlay(
 			const identity = session.modelRegistry.authStorage.oauth.identity(provider, sessionId ?? session.sessionId);
 			return identity ? (report, limit) => limitMatchesActiveAccount(report, limit, identity) : undefined;
 		},
-	});
+	};
+	return { deps, scope: initialScope, doc: initialDoc, callbacks };
 }

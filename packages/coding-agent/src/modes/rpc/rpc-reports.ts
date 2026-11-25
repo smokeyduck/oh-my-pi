@@ -4,7 +4,6 @@
  * same session data source as its slash-command twin (see builtin-registry);
  * all formatting stays client-side.
  */
-import { buildJobTree } from "@oh-my-pi/pi-tui/overlays/job-tree";
 import { cfgShareRedactSecrets, cfgShareServerUrl, cfgShareStore } from "../../commands/settings";
 import {
 	buildShareSnapshot,
@@ -15,6 +14,7 @@ import {
 } from "../../export/share";
 import type { AgentSession } from "../../session/agent-session";
 import { isMCPToolName } from "../../tools/builtin-names";
+import { buildJobTree } from "../view-model/overlays/job-tree";
 import type {
 	RpcActiveTool,
 	RpcActiveToolsResult,

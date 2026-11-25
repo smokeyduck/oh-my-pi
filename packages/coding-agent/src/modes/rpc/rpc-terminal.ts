@@ -11,10 +11,10 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { InteractiveTerminalHost, InteractiveTerminalRequest } from "../../extensibility/extensions/types";
 import { type PtyRunResult, PtySession } from "@oh-my-pi/pi-natives";
-import { loadXtermTerminal } from "@oh-my-pi/pi-tui/tools/terminal-output";
 import { logger } from "@oh-my-pi/pi-utils";
+import type { InteractiveTerminalHost, InteractiveTerminalRequest } from "../../extensibility/extensions/types";
+import { loadXtermTerminal } from "../../tools/terminal-output";
 import type { RpcTerminalFrame, RpcTerminalInfo, RpcTerminalSnapshot } from "./rpc-types";
 
 /** Coalescing window for `terminal_output` frames. */

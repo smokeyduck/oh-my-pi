@@ -2,8 +2,7 @@ import * as path from "node:path";
 import { isCompiledBinary, isRecord, logger, untilAborted, workerHostEntry } from "@oh-my-pi/pi-utils";
 import type { Subprocess } from "bun";
 import type { Browser, CDPSession } from "puppeteer-core";
-import { ToolAbortError } from "../tool-errors";
-import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
+import { ToolAbortError, ToolError } from "../tool-errors";
 import {
 	findFreeCdpPort,
 	findReusableCdp,

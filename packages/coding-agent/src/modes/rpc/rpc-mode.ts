@@ -19,41 +19,16 @@ import { LoginCancelledError } from "@oh-my-pi/pi-ai/error";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
 import { routedModelsAreEqual } from "@oh-my-pi/pi-catalog/models";
-import {
-	choiceValue,
-	defaultFormData,
-	fieldError,
-	type HtmlFormData,
-	type HtmlFormValue,
-	isArrayChoice,
-	textValue,
-} from "@oh-my-pi/pi-tui/html-form/data";
-import { type ChoiceField, type HtmlForm, parseHtmlForm, type TextField } from "@oh-my-pi/pi-tui/html-form/parse";
-import { buildCopyTargets } from "@oh-my-pi/pi-tui/overlays/copy-targets";
-import {
-	type WordCompletionEngine,
-	type WordCompletionMethod,
-	type WordCompletionQuery,
-	wordCompletionQuery,
-} from "@oh-my-pi/pi-tui/prompt/word-completion";
-import { getAvailableThemesWithPaths, getResolvedThemeColors, type Theme, theme } from "@oh-my-pi/pi-tui/theme";
+import type { Theme } from "@oh-my-pi/pi-tui/theme/contract";
+import { currentTheme } from "@oh-my-pi/pi-tui/theme/runtime";
 import { $env, isRecord, logger, Snowflake, setProjectDir, toError } from "@oh-my-pi/pi-utils";
-import { orderedSettings } from "../../config/all-settings";
-import { reportedModelLimits } from "../../config/model-discovery";
-import { resolveRoleChain } from "../../config/model-resolver";
-import { roleCandidatePool } from "../../config/model-roles";
-import { lookup as lookupSetting } from "../../config/registry";
-import { resolveConfigHeaders } from "../../config/resolve-config-value";
-import { cfgPlanDefaultOnStartup, cfgPlanEnabled } from "../../plan-mode/settings";
-import { chatConfig, isChatSession } from "../../session/chat-session";
-import { cfgChatSettings } from "../../session/chat-settings";
-import { cfgSttLanguage } from "../../stt/settings";
-import { cfgSpeechVoice } from "../../tts/settings";
+import { clearPluginRootsAndCaches, resolveActiveProjectRegistryPath } from "../../discovery/helpers";
 import {
 	type ExtensionAskDialogQuestion,
 	type ExtensionAskDialogResult,
-	type ExtensionAskDialogSubmitResult,
+	type ExtensionCustomFactory,
 	type ExtensionCustomOptions,
+	type ExtensionAskDialogSubmitResult,
 	type ExtensionFormDialogResult,
 	type ExtensionUIContext,
 	type ExtensionUIDialogOptions,
@@ -71,6 +46,34 @@ import {
 	type SkillPromptInput,
 	type SkillRediscoverySource,
 } from "../../extensibility/skills";
+import {
+	choiceValue,
+	defaultFormData,
+	type HtmlFormData,
+	type HtmlFormValue,
+	isArrayChoice,
+	textValue,
+} from "../../tools/html-form/data";
+import { type ChoiceField, type HtmlForm, parseHtmlForm, type TextField } from "../../tools/html-form/parse";
+import { getAvailableThemesWithPaths, getResolvedThemeColors } from "../../ui/theme/service";
+import { buildCopyTargets } from "../view-model/overlays/copy-targets";
+import {
+	type WordCompletionEngine,
+	type WordCompletionMethod,
+	type WordCompletionQuery,
+	wordCompletionQuery,
+} from "../view-model/prompt/word-completion";
+import { orderedSettings } from "../../config/all-settings";
+import { reportedModelLimits } from "../../config/model-discovery";
+import { resolveRoleChain } from "../../config/model-resolver";
+import { roleCandidatePool } from "../../config/model-roles";
+import { lookup as lookupSetting } from "../../config/registry";
+import { resolveConfigHeaders } from "../../config/resolve-config-value";
+import { cfgPlanDefaultOnStartup, cfgPlanEnabled } from "../../plan-mode/settings";
+import { chatConfig, isChatSession } from "../../session/chat-session";
+import { cfgChatSettings } from "../../session/chat-settings";
+import { cfgSttLanguage } from "../../stt/settings";
+import { cfgSpeechVoice } from "../../tts/settings";
 import { rebindMemoryBackendForCwd } from "../../hindsight/backend";
 import { requestTextPrediction, textPredictionBackend } from "../../predict/client";
 import { AgentLifecycleManager } from "../../registry/agent-lifecycle";
@@ -149,6 +152,7 @@ import { RpcLiveBridge, type RpcLiveSessionFactory } from "./rpc-live";
 import { RpcTerminalHost, resolveTerminalShell } from "./rpc-terminal";
 import { resolveCliEntryCmd } from "../../subprocess/worker-client";
 import { createAdvisorConfigOverlay } from "../advisor-config-overlay";
+import { AdvisorConfigOverlay } from "../../ui/overlays/advisor-config/advisor-config";
 import { TerminalTool } from "./rpc-terminal-tool";
 import { RpcBrowserHost } from "./rpc-browser-host";
 import { applyRpcMarketplaceAction } from "./rpc-marketplace";
@@ -241,7 +245,7 @@ import { applyRpcManageSkill, buildRpcSkillDetail } from "./rpc-skills";
 import { RpcSubagentRegistry, readRpcSubagentTranscript, resolveOwnedLiveSubagent } from "./rpc-subagents";
 import { startRpcTan } from "./rpc-tan";
 import { pageRpcTranscriptArchive } from "./rpc-transcript-archive";
-import { type HostedComponentFactory, showHostedComponent } from "./rpc-custom-ui";
+import { showHostedComponent, showHostedOverlay } from "./rpc-custom-ui";
 import type {
 	RpcAbortAndRestoreQueueResult,
 	RpcAvailableModelsResult,
@@ -278,6 +282,8 @@ import {
 	RpcWorkspaceRestoreError,
 } from "./rpc-workspace";
 import { buildRpcGitStatus, createRpcWorktree, RpcWorktreeError, removeRpcWorktree } from "./rpc-worktree";
+import type { ExtensionTheme } from "../../extensibility/extensions/render-types";
+import { extensionTheme } from "../../ui/extensions/render-output";
 
 const INVALID_TEXT_CURSOR_ERROR = "cursor must be an integer UTF-16 offset within text";
 
@@ -1624,7 +1630,7 @@ function parseFormDialogResponse(
 	// One entry answers every field of its name, as in HTML form data. Each field that can carry the entry takes it;
 	// a same-name field of another shape (a radio group beside a checkbox group, a group without "Other" beside a
 	// text input) counts as unanswered, as it would in the TUI where the last field wins. At least one field must
-	// carry the entry, and every field must pass the rules the form dialogs apply on submit.
+	// carry the entry. Rules such as `required` or `pattern` are not checked: the form dialogs only flag them.
 	// A null prototype keeps a control named `__proto__` an ordinary key instead of hitting the inherited setter.
 	const data: HtmlFormData = Object.assign(Object.create(null), Object.fromEntries(form.hidden));
 	const hidden = new Map(form.hidden);
@@ -1649,9 +1655,7 @@ function parseFormDialogResponse(
 			}
 		});
 		if (!values.some(({ carried }) => carried)) throw mismatch;
-		for (const { field, value, carried } of values) {
-			const problem = fieldError(field, value);
-			if (problem) throw new Error(`Form field ${JSON.stringify(name)}: ${problem}`);
+		for (const { value, carried } of values) {
 			if (carried && value !== undefined) data[name] = value;
 		}
 	}
@@ -2324,7 +2328,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 			} as RpcExtensionUIRequest);
 		}
 
-		custom<T>(factory: HostedComponentFactory<T>, options?: ExtensionCustomOptions): Promise<T> {
+		custom<T>(factory: ExtensionCustomFactory<T>, options?: ExtensionCustomOptions): Promise<T> {
 			// A host that renders terminals (the GUI) shows the component in one;
 			// any other host still resolves without running the factory.
 			if (!this.interactiveTerminal) return Promise.resolve(undefined as T);
@@ -2365,15 +2369,15 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 			// Autocomplete provider composition is not supported in RPC mode
 		}
 
-		get theme(): Theme {
-			return theme;
+		get theme(): ExtensionTheme {
+			return extensionTheme(currentTheme());
 		}
 
 		getAllThemes(): Promise<{ name: string; path: string | undefined }[]> {
 			return Promise.resolve([]);
 		}
 
-		getTheme(_name: string): Promise<Theme | undefined> {
+		getTheme(_name: string): Promise<ExtensionTheme | undefined> {
 			return Promise.resolve(undefined);
 		}
 
@@ -2392,14 +2396,6 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 
 		setToolsExpanded(_expanded: boolean) {
 			// Tool expansion not supported in RPC mode - no TUI
-		}
-
-		setEditorComponent(): void {
-			// Custom editor components not supported in RPC mode
-		}
-
-		getEditorComponent() {
-			return undefined;
 		}
 	}
 
@@ -2452,6 +2448,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 			});
 			// Close the realtime call (microphone, socket) before the session it delegates into.
 			hostDictation.cancel();
+			composerPrediction.dispose();
 			dictationBridge.dispose();
 			await liveBridge.stop();
 			terminalHost.dispose();
@@ -2962,7 +2959,10 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 				const restored = session.clearQueue({ forInterrupt: true });
 				goalController.stopForHostAbort();
 				abortBuiltinCommands("RPC command aborted by host");
-				await session.abort({ reason: USER_INTERRUPT_LABEL });
+				await session.abort({
+					reason: USER_INTERRUPT_LABEL,
+					detachTools: restored.steering.length + restored.followUp.length > 0,
+				});
 				return fitAbortAndRestoreQueueResponse(id, restored, frameEncoder.maxIntactFrameBytes);
 			}
 
@@ -2973,7 +2973,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 					if (!inputGate.isCurrent(command) || !session.isStreaming || !session.hasInterruptibleInput) {
 						return false;
 					}
-					await session.abort({ reason: USER_INTERRUPT_LABEL, deliverQueuedMessages: true });
+					await session.abort({ reason: USER_INTERRUPT_LABEL, deliverQueuedMessages: true, detachTools: true });
 					return true;
 				});
 				return success(id, "abort_and_deliver_queue", { aborted });
@@ -3455,13 +3455,12 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 				const shown = Promise.withResolvers<void>();
 				const notify = (level: "info" | "warning") => (message: string) =>
 					session.emitNotice(level, message, "advisor");
-				void showHostedComponent<void>(
+				void showHostedOverlay(
 					terminalHost,
 					"Advisor configuration",
-					async (ui, _theme, _keybindings, done) => {
+					async close => {
 						try {
-							return await createAdvisorConfigOverlay(
-								ui,
+							const props = await createAdvisorConfigOverlay(
 								{
 									session,
 									settings: session.settings,
@@ -3469,24 +3468,15 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 									status: notify("info"),
 									warn: notify("warning"),
 									advisorsChanged: () => {},
-									requestRender: () => ui.requestRender(),
 								},
-								() => done(undefined),
+								close,
 							);
+							return () => AdvisorConfigOverlay(props);
 						} finally {
 							shown.resolve();
 						}
 					},
-					{
-						overlay: true,
-						overlayOptions: {
-							anchor: "bottom-center",
-							width: "100%",
-							maxHeight: "100%",
-							margin: 0,
-							fullscreen: true,
-						},
-					},
+					"prefs",
 				).catch((cause: unknown) => {
 					shown.resolve();
 					session.emitNotice("error", cause instanceof Error ? cause.message : String(cause), "advisor");

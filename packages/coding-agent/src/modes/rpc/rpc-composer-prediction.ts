@@ -6,9 +6,10 @@
  * ephemeral side turn, the `composer.predictions` setting, staleness checks,
  * usage and telemetry); this adapter gives it an RPC host in place of the
  * editor and renderer. A host keeps its own composer, so it asks only while
- * that draft is empty, and the controller's repaint requests become frames.
+ * that draft is empty, and changes to the controller's choices become frames.
  */
 
+import { createRoot, effect } from "@oh-my-pi/pi-tui";
 import type { AgentViewSession } from "../../session/agent-session-handle";
 import type { Settings } from "../../config/settings";
 import { ComposerPredictionController } from "../controllers/composer-prediction-controller";
@@ -21,7 +22,8 @@ export interface ComposerPredictionSession extends AgentViewSession {
 export class RpcComposerPrediction {
 	readonly #controller: ComposerPredictionController;
 	readonly #output: (frame: RpcComposerPredictionFrame) => void;
-	/** The alternatives last announced, so a repaint that changes nothing sends no frame. */
+	readonly #stop: () => void;
+	/** The alternatives last announced, so an unchanged prediction sends no frame. */
 	#announced: readonly string[] = [];
 
 	constructor(
@@ -36,11 +38,14 @@ export class RpcComposerPrediction {
 				viewSession: session,
 				focusedAgentId: undefined,
 				// The host checked its own draft before asking.
-				editor: { getText: () => "" },
-				ui: { requestRender: () => this.#announce() },
+				composer: { text: () => "" },
 			},
 			options,
 		);
+		this.#stop = createRoot(dispose => {
+			effect(() => this.#announce());
+			return dispose;
+		});
 	}
 
 	/** Predict the next message for the run that just finished; a no-op when predictions are off or the session is busy. */
@@ -53,6 +58,11 @@ export class RpcComposerPrediction {
 		if (action === "shown") this.#controller.shown();
 		else if (action === "accepted") this.#controller.accepted(rank);
 		else this.#controller.cancel();
+	}
+
+	dispose(): void {
+		this.#stop();
+		this.#controller.cancel();
 	}
 
 	#announce(): void {

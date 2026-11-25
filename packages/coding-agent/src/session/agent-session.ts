@@ -5280,6 +5280,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		}
 
 		if (event.type === "tool_execution_start") {
+			if (event.toolName === "ask") this.#cacheWarmer?.stopForUserInput();
 			this.#recordToolExecutionStart(event);
 		}
 

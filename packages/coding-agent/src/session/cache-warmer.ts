@@ -748,6 +748,11 @@ export class CacheWarmer {
 		if (reason) this.#stop(reason);
 	}
 
+	/** Keep the existing cache entry, but never pay to extend it while an ask waits. */
+	stopForUserInput(): void {
+		this.#stop("waiting for user input");
+	}
+
 	cancel(): void {
 		this.#entry = undefined;
 		this.#pendingEntry = undefined;

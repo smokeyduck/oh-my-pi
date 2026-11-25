@@ -553,6 +553,18 @@ describe("cache warmer lifecycle", () => {
 		expect(h.warmer.cacheEntry).toMatchObject({ tier: "long", ttlMs: 3_600_000 });
 	});
 
+	test("does not refresh while waiting for user input and warms again after the next real request", async () => {
+		const h = harness();
+		start(h);
+		h.warmer.stopForUserInput();
+		await advance(SHORT_DELAY_MS * 2);
+		expect(h.replays).toHaveLength(0);
+		expect(h.refreshes).toHaveLength(0);
+		start(h);
+		await advance(SHORT_DELAY_MS);
+		expect(h.replays).toHaveLength(1);
+	});
+
 	test("streaming mode stops when the agent settles", () => {
 		const h = harness();
 		h.mode = "streaming";

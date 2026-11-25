@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Pause automatic prompt-cache warming while the `ask` tool waits for user input. A subsequent model request can restart warming normally.
+
 ## [19.2.0] - 2026-11-25
 
 ### Breaking Changes

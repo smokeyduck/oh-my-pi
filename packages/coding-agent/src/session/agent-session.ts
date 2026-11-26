@@ -12332,12 +12332,13 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	 *  stable queue id plus the same text/images the editor-restore path
 	 *  surfaces. Only user-restorable entries are listed — advisor cards,
 	 *  hidden companions, and internal steers never appear here (mirrors
-	 *  {@link clearQueue}'s user filter on top of the displayable filter). */
+	 *  {@link clearQueue}'s user filter on top of the displayable filter).
+	 *  Dequeued entries stay visible but read-only until the transcript records them. */
 	listQueuedMessages(): {
 		steering: SessionQueuedMessage[];
 		followUp: SessionQueuedMessage[];
 	} {
-		const collect = (messages: readonly AgentMessage[]) =>
+		const collect = (messages: readonly AgentMessage[], pending = true) =>
 			messages.filter(isUserQueuedMessage).flatMap(message => {
 				const id = this.agent.queueEntryId(message);
 				return id === undefined
@@ -12346,14 +12347,14 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 							{
 								id,
 								...toRestoredQueuedMessage(message),
-								editable: message.role === "user",
+							editable: pending && message.role === "user",
 								timestamp: message.timestamp,
 							},
 						];
 			});
 		return {
-			steering: collect(this.agent.peekSteeringQueue()),
-			followUp: collect(this.agent.peekFollowUpQueue()),
+			steering: [...collect(this.agent.peekDeliveringMessages("steering"), false), ...collect(this.agent.peekSteeringQueue())],
+			followUp: [...collect(this.agent.peekDeliveringMessages("followUp"), false), ...collect(this.agent.peekFollowUpQueue())],
 		};
 	}
 

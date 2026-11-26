@@ -207,12 +207,12 @@ describe("AgentSession queue_update events", () => {
 
 		expect(streamingAtInject).toBe(true);
 		expect(removedFirst).toBe(true);
-		// Enqueue both, then the removal, then the forced continuation turn
-		// dequeuing "second" for delivery — each step is one distinct snapshot.
-		expect(updates.map(queueTexts).map(update => update.followUp)).toEqual([
-			["first"],
-			["first", "second"],
-			["second"],
+		// The surviving entry remains visible but becomes read-only during delivery.
+		expect(updates.map(update => update.followUp.map(({ text, editable }) => ({ text, editable })))).toEqual([
+			[{ text: "first", editable: true }],
+			[{ text: "first", editable: true }, { text: "second", editable: true }],
+			[{ text: "second", editable: true }],
+			[{ text: "second", editable: false }],
 			[],
 		]);
 		expect(updates.every(update => update.steering.length === 0)).toBe(true);
@@ -413,6 +413,8 @@ describe("AgentSession queue_update events", () => {
 
 			preparation.release();
 			await secondCallStarted.promise;
+			expect(queueTexts(updates.at(-1)!).steering).toEqual(["STEER_CUSTOM"]);
+			releaseSecondCall.resolve();
 
 			// The request opened, so the steer leaves the snapshot once the transcript records
 			// it. The follow-up queued during preparation stays pending.
@@ -421,7 +423,6 @@ describe("AgentSession queue_update events", () => {
 			expect({ ...queueTexts(updates.at(-1)!), liveSteered: 0 }).toEqual(target.getQueuedMessages());
 			expect(updates.at(-1)!.steering).toEqual([]);
 
-			releaseSecondCall.resolve();
 			await running;
 
 			expect(target.getQueuedMessages()).toEqual({ steering: [], followUp: [], liveSteered: 0 });
@@ -452,7 +453,7 @@ describe("AgentSession queue_update events", () => {
 		const recordedWhenUnlisted: boolean[] = [];
 		target.subscribe(event => {
 			if (event.type !== "queue_update") return;
-			if (event.followUp.includes("later")) listed = true;
+			if (event.followUp.some(message => message.text === "later")) listed = true;
 			else if (listed) {
 				listed = false;
 				recordedWhenUnlisted.push(recorded());

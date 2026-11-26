@@ -157,6 +157,7 @@ import { cfgAdvisorEnabled } from "./advisor/settings";
 import { BUILTIN_TOOL_NAMES } from "./tools/builtin-names";
 import { syncRelayInstallsOnStartup } from "./tools/browser/relay/installs";
 import { claimTerminal } from "./tools/browser/terminal-owner";
+import { cfgBashReapBackground } from "./exec/settings";
 import { cfgAsyncPrintWake, cfgLaunchPersist, cfgToolsApprovalMode } from "./tools/settings";
 import {
 	cfgAutocompleteMaxVisible,
@@ -2210,6 +2211,10 @@ export async function runRootCommand(
 		if (parsedArgs.noJudge) cfgNoJudge.override(settingsInstance, true);
 		if (parsedArgs.noSpotlight) cfgNoSpotlight.override(settingsInstance, true);
 		if (parsedArgs.offline) cfgOffline.override(settingsInstance, true);
+		if (protocolHost === "rpc") {
+			// RPC hosts own their processes: no leftover reminder, no session-end reaping.
+			cfgBashReapBackground.override(settingsInstance, false);
+		}
 
 		// The registry composes policy-dependent metadata synchronously, including
 		// extended-context window caps, so it must receive the finalized settings.

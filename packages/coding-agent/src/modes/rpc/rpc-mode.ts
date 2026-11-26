@@ -65,14 +65,11 @@ import {
 } from "../view-model/prompt/word-completion";
 import { orderedSettings } from "../../config/all-settings";
 import { reportedModelLimits } from "../../config/model-discovery";
-import { resolveRoleChain } from "../../config/model-resolver";
-import { roleCandidatePool } from "../../config/model-roles";
 import { lookup as lookupSetting } from "../../config/registry";
 import { resolveConfigHeaders } from "../../config/resolve-config-value";
 import { cfgPlanDefaultOnStartup, cfgPlanEnabled } from "../../plan-mode/settings";
 import { chatConfig, isChatSession } from "../../session/chat-session";
 import { cfgChatSettings } from "../../session/chat-settings";
-import { cfgSttLanguage } from "../../stt/settings";
 import { cfgSpeechVoice } from "../../tts/settings";
 import { rebindMemoryBackendForCwd } from "../../hindsight/backend";
 import { requestTextPrediction, textPredictionBackend } from "../../predict/client";
@@ -97,7 +94,7 @@ import { buildAvailableSlashCommands } from "../../slash-commands/available-comm
 import { listLogoutAccounts, logoutCredential } from "../../slash-commands/helpers/logout";
 import { describeRedeemOutcome, toResetUsageAccounts } from "../../slash-commands/helpers/reset-usage";
 import { sttClient } from "../../stt/asr-client";
-import { resolveSttModelSpec } from "../../stt/models";
+import { hostDictationLanguage, hostDictationModelKey, resolveHostDictationCandidate } from "../../stt/stt-controller";
 import type { ToolSession } from "../../tools";
 import { interactivePtyEnv } from "../../tools/bash-interactive";
 import { DebugTool } from "../../tools/debug";
@@ -4407,12 +4404,12 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 						);
 					}
 					if (samples.length === 0) return success(id, "transcribe_audio", { text: "" });
-					// Same resolution as the TUI stt-controller: stale/legacy keys
-					// fall back to the SoTA default rather than failing.
-					const pool = roleCandidatePool("dictation", session.settings, session.modelRegistry);
-					const selectedId = resolveRoleChain("dictation", session.settings, pool)[0]?.model.id;
-					const modelKey = resolveSttModelSpec(selectedId).key;
-					const language = cfgSttLanguage.get(session.settings);
+					const model = resolveHostDictationCandidate(session.settings, session.modelRegistry)?.model;
+					if (model?.api === "openai-transcriptions") {
+						return error(id, "transcribe_audio", "Cloud dictation does not use the local prewarm RPC", "stt_cloud_selected");
+					}
+					const modelKey = hostDictationModelKey(model);
+					const language = hostDictationLanguage(session.settings);
 					const text = await sttClient.transcribe(modelKey, samples, {
 						language: language || undefined,
 					});

@@ -28,6 +28,7 @@ import {
 	resolveMemoryModel,
 	runMemoryUpdate,
 } from "./index";
+import { type ProjectKnowledge, readProjectKnowledge } from "./project-knowledge";
 import {
 	type ConsolidationJobState,
 	closeMemoryDb,
@@ -94,6 +95,8 @@ export interface MemoryOverview {
 	enabled: boolean;
 	notes: MemoryListEntry[];
 	lessons: MemoryListEntry[];
+	/** An explicit long-term source, independent of the operational Memory pipeline. */
+	knowledge: ProjectKnowledge;
 	/** `memory_summary.md`: the consolidated digest every new session starts with. */
 	summary: string;
 	/** `MEMORY.md`: the full consolidated notes the agent can open on demand. */
@@ -126,6 +129,7 @@ export function memoryScopeFor(agentDir: string, cwd: string): MemoryScope {
 export async function readMemoryOverview(options: {
 	agentDir: string;
 	settings: Settings;
+	knowledgeSettings?: Settings;
 	scope: MemoryScope;
 	session?: AgentSession;
 	modelRegistry?: ModelRegistry;
@@ -133,8 +137,8 @@ export async function readMemoryOverview(options: {
 	const { agentDir, settings, scope } = options;
 	const config = loadMemoryConfig(settings);
 	const root = getMemoryRoot(agentDir, scope.cwd);
-	const [snapshot, notes, lessons, full, playbooks, summaryStat, threads] = await Promise.all([
-		readMemorySnapshot(root),
+	const [knowledge, notes, lessons, full, playbooks, summaryStat, threads] = await Promise.all([
+		readProjectKnowledge(agentDir, scope.cwd, options.knowledgeSettings ?? settings),
 		readMemoryList(root, "notes"),
 		readMemoryList(root, "lessons"),
 		readText(path.join(root, "MEMORY.md")),
@@ -142,6 +146,7 @@ export async function readMemoryOverview(options: {
 		statOrUndefined(path.join(root, "memory_summary.md")),
 		collectThreadsInDir(scope.sessionDir),
 	]);
+	const snapshot = await readMemorySnapshot(root, knowledge);
 	const {
 		notes: _n,
 		summary: _s,
@@ -209,6 +214,7 @@ export async function readMemoryOverview(options: {
 		enabled: config.enabled,
 		notes,
 		lessons,
+		knowledge,
 		summary: snapshot.summary,
 		full,
 		playbooks,

@@ -44,6 +44,7 @@ import type {
 } from "../../extensibility/extensions/types";
 import type { GoalModeState } from "../../goals/state";
 import type { MemoryListEditResult } from "../../memories";
+import type { ProjectKnowledgeEdit } from "../../memories/project-knowledge";
 import type { MemoryOverview } from "../../memories/workbench";
 import type { MemoryBackendId } from "../../memory-backend/types";
 import type { AgentSessionEvent, SessionStats } from "../../session/agent-session";
@@ -978,6 +979,8 @@ export type RpcHostDictationState = "preparing" | "recording" | "transcribing" |
 export interface RpcHostDictationStateFrame {
 	type: "host_dictation_state";
 	state: RpcHostDictationState;
+	/** Explicit cloud provider that receives audio when dictation finishes; absent for local dictation. */
+	cloudProvider?: string;
 }
 
 /**
@@ -1921,6 +1924,7 @@ export type RpcMemoryOverview = MemoryOverview;
 
 /** A workbench edit. Notes and lessons are named by their stored `line`. */
 export type RpcMemoryEdit =
+	| ProjectKnowledgeEdit
 	| { kind: "note"; action: "add"; text: string }
 	| { kind: "note" | "lesson"; action: "update"; line: string; text: string; context?: string }
 	| { kind: "note" | "lesson"; action: "delete"; line: string }

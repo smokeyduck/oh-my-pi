@@ -147,16 +147,17 @@ export class RpcHostDictationBridge {
 				settings: this.#session.settings,
 				registry: this.#session.modelRegistry,
 				getSessionId: () => this.#session.sessionId,
+				hostDictation: true,
 			},
 		);
 		this.#controller = controller;
 		return controller;
 	}
 
-	#setState(state: RpcHostDictationState, generation: number): void {
+	#setState(state: RpcHostDictationState, generation: number, cloudProvider?: string): void {
 		if (generation !== this.#generation || state === this.#state) return;
 		this.#state = state;
-		this.#output({ type: "host_dictation_state", state });
+		this.#output({ type: "host_dictation_state", state, ...(cloudProvider && { cloudProvider }) });
 	}
 
 	#target(generation: number): SttTarget {
@@ -180,7 +181,7 @@ export class RpcHostDictationBridge {
 		return {
 			showWarning: message => notice("warning", message),
 			showStatus: message => notice("status", message),
-			onStateChange: state => this.#setState(state, generation),
+			onStateChange: (state, cloudProvider) => this.#setState(state, generation, cloudProvider),
 		};
 	}
 

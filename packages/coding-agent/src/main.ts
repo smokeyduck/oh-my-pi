@@ -154,7 +154,7 @@ import { cfgGoalEnabled } from "./goals/settings";
 import { cfgPlanDefaultOnStartup, cfgPlanEnabled } from "./plan-mode/settings";
 
 import { cfgAdvisorEnabled } from "./advisor/settings";
-import { BUILTIN_TOOL_NAMES } from "./tools/builtin-names";
+import type { BuiltinToolName } from "./tools/builtin-names";
 import { syncRelayInstallsOnStartup } from "./tools/browser/relay/installs";
 import { claimTerminal } from "./tools/browser/terminal-owner";
 import { cfgBashReapBackground } from "./exec/settings";
@@ -1928,7 +1928,13 @@ export async function buildSessionOptions(
 
 	// Chat defaults to no tools; an explicit --tools remains an allowlist.
 	const sessionKind = parsed.chat ? "chat" : (sessionManager?.getHeader()?.kind ?? "agent");
-	if (sessionKind === "chat" || parsed.noTools) {
+	const hostMode = parsed.mode === "rpc-ui" ? process.env.WISA_RPC_HOST_MODE : undefined;
+	if (hostMode === "host-tools-only") {
+		// Unattended host-tool runs start with no registered built-ins or extensions.
+		options.toolNames = [];
+		options.restrictToolNames = true;
+		options.disableExtensionDiscovery = true;
+	} else if (sessionKind === "chat" || parsed.noTools) {
 		// The allowlist is the whole tool surface, and subagents inherit the restriction.
 		options.toolNames = parsed.tools && parsed.tools.length > 0 ? parsed.tools : [];
 		options.restrictToolNames = true;
@@ -1936,22 +1942,12 @@ export async function buildSessionOptions(
 			// The restricted session would not bind extensions; do not run their factories either.
 			options.disableExtensionDiscovery = true;
 		}
+	} else if (hostMode === "work") {
+		// Work is still an Agent session. Unavailable or disabled tools are skipped by Core.
+		options.toolNames = ["read", "ask", "computer", "glob", "grep", "todo", "web_search"] satisfies BuiltinToolName[];
+		options.restrictToolNames = true;
 	} else if (parsed.tools) {
 		options.toolNames = parsed.tools;
-	}
-	// Desktop profiles describe availability, not explicit CLI requests: tools
-	// disabled by a Core setting or unavailable here must not block startup.
-	// Work keeps its agent session kind, but restricts registration to the list.
-	if (parsed.mode === "rpc-ui" && sessionKind !== "chat") {
-		const profile = process.env.WISA_GUI_TOOL_PROFILE;
-		if (profile?.startsWith("work:")) {
-			const names = profile.slice("work:".length).split(",");
-			options.toolNames = BUILTIN_TOOL_NAMES.filter(name => names.includes(name));
-			options.restrictToolNames = true;
-		} else if (profile?.startsWith("coding:")) {
-			const names = profile.slice("coding:".length).split(",");
-			options.disabledBuiltinTools = new Set(BUILTIN_TOOL_NAMES.filter(name => names.includes(name)));
-		}
 	}
 
 	if (parsed.noLsp) {
@@ -2885,13 +2881,7 @@ export async function runRootCommand(
 
 			const sessionToolNames = session.getAllToolNames();
 			try {
-				// A workspace may request a tool the active Coding profile turned off.
-				// The profile wins, but other invalid or unavailable CLI requests still fail.
-				const disabled = sessionOptions.disabledBuiltinTools;
-				validateToolNames(
-					disabled ? initialArgs.tools?.filter(name => !disabled.has(name)) : initialArgs.tools,
-					sessionToolNames,
-				);
+				validateToolNames(initialArgs.tools, sessionToolNames);
 			} catch (error) {
 				await session.dispose();
 				// With no working eval backend, `--tools eval` is rejected here, before the startup

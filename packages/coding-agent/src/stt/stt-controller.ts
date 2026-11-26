@@ -5,7 +5,12 @@ import { AudioCapture } from "@oh-my-pi/pi-natives";
 import type { ModelBrowserRegistry } from "../modes/view-model/overlays/model-browser";
 import { logger } from "@oh-my-pi/pi-utils";
 import { cfgOffline } from "../config/auxiliary-model-policy";
-import { type RoleChainCandidate, resolveConfiguredModelPatterns, resolveRoleChain } from "../config/model-resolver";
+import {
+	type RoleChainCandidate,
+	resolveConfiguredModelPatterns,
+	resolveModelRoleValue,
+	resolveRoleChain,
+} from "../config/model-resolver";
 import { roleCandidatePool } from "../config/model-roles";
 import { type Settings, settings } from "../config/settings";
 import { type SttStreamHandle, sttClient } from "./asr-client";
@@ -22,7 +27,7 @@ export type SttState = "idle" | "recording" | "transcribing";
 export interface SttCallbacks {
 	showWarning(msg: string): void;
 	showStatus(msg: string): void;
-	onStateChange(state: SttState): void;
+	onStateChange(state: SttState, cloudProvider?: string): void;
 	/** Keep this capture as a draft, without interpreting submit commands. */
 	manualSubmit?: boolean;
 }
@@ -51,6 +56,42 @@ export interface STTControllerDependencies {
 	registry: SttRegistry;
 	getSessionId?: () => string;
 	getSessionProvider?: () => string | undefined;
+	/** Host dictation requires explicit opt-in to a cloud provider. */
+	hostDictation?: boolean;
+}
+
+/** The host allows cloud only for a directly configured primary model, never as a fallback. */
+export function resolveHostDictationCandidate(
+	settings: Settings,
+	registry: ModelBrowserRegistry,
+): RoleChainCandidate | undefined {
+	const selected = settings.getModelRole("dictation")?.trim();
+	if (!selected) return undefined;
+	const pool = roleCandidatePool("dictation", settings, registry);
+	const source = settings.getModelRoleProvenance("dictation");
+	if (
+		!cfgOffline.get(settings) &&
+		(source === "global" || source === "runtime") &&
+		!settings.isProjectModelRoleRuntimeOverrideActive("dictation")
+	) {
+		const model = resolveModelRoleValue(selected, pool, { settings }).model;
+		if (model?.api === "openai-transcriptions" && selected === `${model.provider}/${model.id}`) {
+			return { model, explicit: true };
+		}
+	}
+	return resolveRoleChain(
+		"dictation",
+		settings,
+		pool.filter(model => model.api === "local-inference"),
+	).find(candidate => candidate.explicit);
+}
+
+export function hostDictationModelKey(model?: Model<Api>): SttModelKey {
+	return resolveSttModelSpec(model?.id ?? "whisper-small").key;
+}
+
+export function hostDictationLanguage(settings: Settings): string {
+	return settings.getProvenanceDetails(cfgSttLanguage).layers.length ? cfgSttLanguage.get(settings) : "vi";
 }
 
 /** Coordinates native microphone capture with streaming local or buffered cloud transcription. */
@@ -67,6 +108,7 @@ export class STTController {
 	readonly #registry: SttRegistry | undefined;
 	readonly #getSessionId: (() => string) | undefined;
 	readonly #getSessionProvider: (() => string | undefined) | undefined;
+	readonly #hostDictation: boolean;
 
 	// Live streaming capture.
 	#stream: SttStreamHandle | null = null;
@@ -98,12 +140,14 @@ export class STTController {
 			this.#registry = dependencies?.registry;
 			this.#getSessionId = dependencies?.getSessionId;
 			this.#getSessionProvider = dependencies?.getSessionProvider;
+			this.#hostDictation = dependencies?.hostDictation ?? false;
 		} else {
 			this.#createCapture = onAudio => new AudioCapture(16_000, onAudio);
 			this.#settings = createCaptureOrDependencies?.settings ?? settings;
 			this.#registry = createCaptureOrDependencies?.registry;
 			this.#getSessionId = createCaptureOrDependencies?.getSessionId;
 			this.#getSessionProvider = createCaptureOrDependencies?.getSessionProvider;
+			this.#hostDictation = createCaptureOrDependencies?.hostDictation ?? false;
 		}
 	}
 
@@ -113,7 +157,8 @@ export class STTController {
 
 	#setState(state: SttState, options: SttCallbacks): void {
 		this.#state = state;
-		options.onStateChange(state);
+		if (this.#hostDictation && this.#cloudModel) options.onStateChange(state, this.#cloudModel.provider);
+		else options.onStateChange(state);
 	}
 
 	/** Start dictating into `editor`, reporting to `options` until the capture ends. A no-op while a
@@ -161,6 +206,7 @@ export class STTController {
 
 	#resolveCandidate(): RoleChainCandidate | undefined {
 		if (!this.#registry) return undefined;
+		if (this.#hostDictation) return resolveHostDictationCandidate(this.#settings, this.#registry);
 		const pool = roleCandidatePool("dictation", this.#settings, this.#registry);
 		return resolveRoleChain("dictation", this.#settings, pool).find(
 			candidate => !cfgOffline.get(this.#settings) || candidate.model.provider === this.#getSessionProvider?.(),
@@ -168,6 +214,7 @@ export class STTController {
 	}
 
 	#resolveModelKey(model = this.#resolveCandidate()?.model): SttModelKey {
+		if (this.#hostDictation) return hostDictationModelKey(model);
 		return resolveSttModelSpec(model?.id).key;
 	}
 
@@ -226,7 +273,7 @@ export class STTController {
 
 	async #startWith(editor: SttTarget, options: SttCallbacks, signal: AbortSignal): Promise<void> {
 		const first = this.#resolveCandidate();
-		if (cfgOffline.get(this.#settings) && !first) {
+		if (!this.#hostDictation && cfgOffline.get(this.#settings) && !first) {
 			options.showWarning("No dictation model matches the active session provider in offline mode.");
 			return;
 		}
@@ -255,11 +302,15 @@ export class STTController {
 		let modelKey = await this.#ensureDeps(options, this.#resolveModelKey(model), signal);
 		if (!modelKey || signal.aborted) return;
 		model = this.#resolveCandidate()?.model;
-		if (cfgOffline.get(this.#settings) && !model) {
+		if (!this.#hostDictation && cfgOffline.get(this.#settings) && !model) {
 			options.showWarning("No dictation model matches the active session provider in offline mode.");
 			return;
 		}
 		if (model?.api === "openai-transcriptions") {
+			if (this.#hostDictation) {
+				options.showWarning("The dictation model changed to a cloud model. Start a new capture to use it.");
+				return;
+			}
 			this.#startBuffered(editor, options, model);
 			return;
 		}
@@ -272,7 +323,7 @@ export class STTController {
 			modelKey = await this.#ensureDeps(options, startModelKey, signal);
 			if (!modelKey || signal.aborted) return;
 		}
-		if (cfgOffline.get(this.#settings) && model?.provider !== this.#getSessionProvider?.()) {
+		if (!this.#hostDictation && cfgOffline.get(this.#settings) && model?.provider !== this.#getSessionProvider?.()) {
 			options.showWarning("Dictation is unavailable: the active session provider changed in offline mode.");
 			return;
 		}
@@ -355,10 +406,15 @@ export class STTController {
 		let failed = false;
 		let finalText = "";
 		try {
-			if (cfgOffline.get(this.#settings) && model.provider !== this.#getSessionProvider?.()) {
+			if (this.#hostDictation) {
+				const selected = this.#resolveCandidate()?.model;
+				if (selected?.api !== "openai-transcriptions" || selected.id !== model.id || selected.provider !== model.provider) {
+					throw new Error("The cloud dictation model is no longer selected. No audio was sent.");
+				}
+			} else if (cfgOffline.get(this.#settings) && model.provider !== this.#getSessionProvider?.()) {
 				throw new Error("Dictation is unavailable: the active session provider changed in offline mode.");
 			}
-			const language = cfgSttLanguage.get(this.#settings);
+			const language = this.#hostDictation ? hostDictationLanguage(this.#settings) : cfgSttLanguage.get(this.#settings);
 			const result = await transcribeAudio(
 				model,
 				{
@@ -414,7 +470,7 @@ export class STTController {
 	}
 
 	async #startStreaming(editor: SttTarget, options: SttCallbacks, modelKey: SttModelKey): Promise<void> {
-		const language = cfgSttLanguage.get(this.#settings);
+		const language = this.#hostDictation ? hostDictationLanguage(this.#settings) : cfgSttLanguage.get(this.#settings);
 		this.#streamEditor = editor;
 		this.#streamCallbacks = options;
 		this.#streamCommitted = false;

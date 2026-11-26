@@ -80,6 +80,7 @@ import {
 	cfgTaskSpeculativeLaunch,
 	cfgTaskSteps,
 	cfgTaskStructured,
+	isTaskJudgeRoutingEnabled,
 	perCallModelEnabled,
 } from "./settings";
 import type { Theme } from "@oh-my-pi/pi-tui/theme/contract";
@@ -786,6 +787,8 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		stream: {
 			open: async context => {
 				if (!cfgTaskSpeculativeLaunch.get(this.session.settings) || !this.#isBatchEnabled()) return undefined;
+				// Do not send an item to Judge until the complete call has been accepted.
+				if (isTaskJudgeRoutingEnabled(this.session.settings)) return undefined;
 				if (!context.coordinator.authorizeLaunch) return undefined;
 				const id = context.parentToolCallId;
 				const session = new TaskLaunchSession({

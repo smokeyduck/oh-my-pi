@@ -23,10 +23,6 @@ export interface EditModeSessionLike {
 export function resolveEditMode(session: EditModeSessionLike): EditModeSetting {
 	const mode = cfgEditMode.get(session.settings);
 	if (mode === "none") return mode;
-	// The desktop Coding profile makes an explicit per-sidecar choice. With
-	// no choice supplied, preserve Core's model-specific and global precedence.
-	const guiMode = process.env.WISA_GUI_EDIT_MODE;
-	if (process.env.WISA_STUDIO_DEFAULTS === "1" && (guiMode === "hashline" || guiMode === "replace")) return guiMode;
 
 	const activeModel = session.getActiveModelString?.();
 	const modelVariant = editVariantForModel(session.settings, activeModel);

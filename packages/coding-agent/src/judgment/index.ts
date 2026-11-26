@@ -469,6 +469,7 @@ export interface NativeJudgmentDeps {
 	signal?: AbortSignal;
 	onUsage?: (usage: JudgmentUsage) => void;
 	telemetry?: AgentTelemetryConfig;
+	costGate?: CostGateApi;
 }
 
 /**
@@ -492,6 +493,7 @@ export async function judgeNatively<Q extends Questions>(
 		purpose,
 		onUsage: deps.onUsage,
 		telemetry: deps.telemetry,
+		costGate: deps.costGate,
 		cache: sharedJudgmentCache(),
 	});
 	const timeout = AbortSignal.timeout(timeoutMs);

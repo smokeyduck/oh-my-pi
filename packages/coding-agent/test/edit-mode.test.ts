@@ -51,27 +51,11 @@ describe("resolveEditMode", () => {
 		expect(resolveEditMode(createSession({ activeModel: "openrouter/moonshotai/Kimi-K2-Instruct" }))).toBe("replace");
 	});
 
-	test("honors the desktop edit choice before model variants, but not when edits are disabled", () => {
-		const oldGuiMode = process.env.WISA_GUI_EDIT_MODE;
-		const oldDefaults = process.env.WISA_STUDIO_DEFAULTS;
+	test("keeps edit disabled even when a model variant is configured", () => {
 		const session = createSession({ activeModel: "openrouter/moonshotai/Kimi-K2-Instruct", modelVariant: "apply_patch" });
-		try {
-			process.env.WISA_STUDIO_DEFAULTS = "1";
-			process.env.WISA_GUI_EDIT_MODE = "hashline";
-			expect(resolveEditMode(session)).toBe("hashline");
-			process.env.WISA_GUI_EDIT_MODE = "replace";
-			expect(resolveEditMode(session)).toBe("replace");
-			process.env.WISA_GUI_EDIT_MODE = "";
-			expect(resolveEditMode(session)).toBe("apply_patch");
-			process.env.WISA_GUI_EDIT_MODE = "hashline";
-			cfgEditMode.override(session.settings, "none");
-			expect(resolveEditMode(session)).toBe("none");
-		} finally {
-			if (oldGuiMode === undefined) delete process.env.WISA_GUI_EDIT_MODE;
-			else process.env.WISA_GUI_EDIT_MODE = oldGuiMode;
-			if (oldDefaults === undefined) delete process.env.WISA_STUDIO_DEFAULTS;
-			else process.env.WISA_STUDIO_DEFAULTS = oldDefaults;
-		}
+		expect(resolveEditMode(session)).toBe("apply_patch");
+		cfgEditMode.override(session.settings, "none");
+		expect(resolveEditMode(session)).toBe("none");
 	});
 
 	test("falls back for K3 SKUs without changing ordinary or near-miss model edit mode", () => {

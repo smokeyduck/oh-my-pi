@@ -18,7 +18,17 @@ export const cfgSttEnabled = register({
 	},
 });
 
-export const cfgSttLanguage = register({ id: "stt.language", type: "string", default: "en" });
+export const cfgSttLanguage = register({
+	id: "stt.language",
+	type: "string",
+	default: "en",
+	ui: {
+		tab: "interaction",
+		group: "Speech",
+		label: "Dictation Language",
+		description: "Dictation language code, or blank for automatic detection when supported by the model",
+	},
+});
 
 export const cfgSttSubmitTrigger = register({
 	id: "stt.submitTrigger",

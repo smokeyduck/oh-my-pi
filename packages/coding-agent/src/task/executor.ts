@@ -32,6 +32,7 @@ import type { Rule } from "../capability/rule";
 import type { EffectiveExtensionRoots } from "../capability/types";
 import { ModelRegistry } from "../config/model-registry";
 import { formatModelSelectorValue } from "../config/model-selector";
+import { type JudgedModelRoute, resolveJudgedModelRoute } from "./judge-routing";
 import { previewLine, shortenToolArgumentPaths, TRUNCATE_LENGTHS } from "../utils/render-utils";
 import { replaceTabs } from "../utils/text-width";
 import { diffStats, type EditMode, getEditInputPaths } from "../tools/details/edit";
@@ -506,6 +507,8 @@ export interface ExecutorOptions {
 	preferHealthyModel?: boolean;
 	/** Extension routing note for the chosen model; surfaced as `resolvedModelRoute`. */
 	modelRoute?: string;
+	/** Optional judged initial route; normal fallback policy is left intact. */
+	judgedModelRoute?: JudgedModelRoute;
 	/**
 	 * Active model selector of the parent session, used as an auth-aware fallback
 	 * if the resolved subagent model has no working credentials. See #985.
@@ -5128,22 +5131,36 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 							modelRole ?? resolveExplicitModelRole(modelPatterns, subagentSettings),
 						)
 					: undefined;
+			const judgedModel = options.judgedModelRoute && resolveJudgedModelRoute(options.judgedModelRoute, modelRegistry);
+			if (judgedModel) progress.resolvedModelRoute = "Initial route selected by native Judge";
 			const {
 				model,
 				thinkingLevel: resolvedThinkingLevel,
 				explicitThinkingLevel,
 				authFallbackUsed,
 				warning: modelResolutionWarning,
-			} = await awaitAbortable(
-				resolveModelOverrideWithAuthFallback(
-					modelPatterns,
-					options.parentActiveModelPattern,
-					modelRegistry,
-					settings,
-					id,
-					{ exactOnly: !!options.perCallModelGrants, allowedProvider, preferHealthy: options.preferHealthyModel },
-				),
-			);
+			} = judgedModel
+				? {
+						model: judgedModel,
+						thinkingLevel: undefined,
+						explicitThinkingLevel: false,
+						authFallbackUsed: false,
+						warning: undefined,
+					}
+				: await awaitAbortable(
+						resolveModelOverrideWithAuthFallback(
+							modelPatterns,
+							options.parentActiveModelPattern,
+							modelRegistry,
+							settings,
+							id,
+							{
+								exactOnly: !!options.perCallModelGrants,
+								allowedProvider,
+								preferHealthy: options.preferHealthyModel,
+							},
+						),
+					);
 			if (cfgOffline.get(settings) && !model) {
 				throw new Error("Offline mode: no subagent model is available on the active parent provider.");
 			}

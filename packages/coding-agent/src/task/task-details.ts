@@ -253,7 +253,7 @@ export interface AgentProgress {
 	resolvedThinkingLevel?: ConfiguredThinkingLevel;
 	/** True when {@link resolvedModel} is the target of an active retry fallback (not the originally configured model). Lets observer-only UIs (collab guests, Agent Hub rows with no live session) flag the fallback and keep the provider. */
 	resolvedModelIsFallback?: boolean;
-	/** Extension routing note (e.g. model-pools) explaining why {@link resolvedModel} was chosen. */
+	/** Why the initial model was selected, from native Judge routing or an extension such as model-pools. */
 	resolvedModelRoute?: string;
 	/** True when a live advisor was attached to this run's session, not merely enabled in settings. */
 	advisor?: boolean;

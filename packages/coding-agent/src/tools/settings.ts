@@ -614,12 +614,12 @@ export const cfgFindEnabled = register({
 		group: "Available Tools",
 		label: "Find (semantic grep)",
 		description:
-			"Enable the find tool: natural-language search for files and line ranges, judged by the judge model role. Auto enables it when the first usable judge is native",
+			"Enable the find tool: natural-language search for files and line ranges, judged by the judge model role. Auto enables it when the first available judge candidate uses a native backend",
 		options: [
 			{
 				value: "auto",
 				label: "Auto",
-				description: "Enable when the first usable judge is native",
+				description: "Enable when the first available judge candidate uses a native backend",
 			},
 			{ value: "on", label: "On", description: "Always enable, whichever model the judge role resolves to" },
 			{ value: "off", label: "Off", description: "Disable the find tool" },
@@ -711,10 +711,7 @@ export const cfgGenerateImageEnabled = register({
 export const cfgComputerEnabled = register({
 	id: "computer.enabled",
 	type: "boolean",
-	default:
-		process.env.WISA_STUDIO_DEFAULTS === "1" &&
-		process.env.WISA_GUI_TOOL_PROFILE?.startsWith("work:") === true &&
-		process.env.WISA_GUI_TOOL_PROFILE.slice("work:".length).split(",").includes("computer"),
+	default: process.env.WISA_STUDIO_DEFAULTS === "1" && process.env.WISA_RPC_HOST_MODE === "work",
 	ui: {
 		tab: "tools",
 		group: "Available Tools",

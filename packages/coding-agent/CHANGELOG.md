@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### WISA Studio
+
+- Use Core settings for Coding tabs and a restricted default tool set for Work tabs, preserving explicit tool and approval restrictions.
+- Add opt-in native Judge routing for subagents and a separate Obsidian vault for reviewed project knowledge.
+- Default Studio dictation to local Whisper Small with Vietnamese; cloud recognition requires an explicit cloud model.
+
 ### Fixed
 
 - Pause automatic prompt-cache warming while the `ask` tool waits for user input. A subsequent model request can restart warming normally.

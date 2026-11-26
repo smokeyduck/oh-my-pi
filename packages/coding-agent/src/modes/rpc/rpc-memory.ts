@@ -5,6 +5,7 @@
  */
 import * as path from "node:path";
 import { editMemoryList } from "../../memories";
+import { editLocalKnowledgeNote, editProjectKnowledge } from "../../memories/project-knowledge";
 import {
 	eraseMemory,
 	memoryScopeFor,
@@ -25,11 +26,18 @@ function scopeOf(session: AgentSession, cwd: string | undefined) {
 	return memoryScopeFor(session.settings.getAgentDir(), target);
 }
 
+async function knowledgeSettingsFor(session: AgentSession, cwd: string) {
+	const settings = session.settings;
+	return cwd === settings.getCwd() ? settings : settings.cloneForCwd(cwd);
+}
+
 export async function buildRpcMemoryOverview(session: AgentSession, cwd?: string): Promise<RpcMemoryOverview> {
+	const scope = scopeOf(session, cwd);
 	return readMemoryOverview({
 		agentDir: session.settings.getAgentDir(),
 		settings: session.settings,
-		scope: scopeOf(session, cwd),
+		knowledgeSettings: await knowledgeSettingsFor(session, scope.cwd),
+		scope,
 		session,
 		modelRegistry: session.modelRegistry,
 	});
@@ -69,22 +77,18 @@ export async function applyRpcMemoryEdit(
 	const scope = scopeOf(session, cwd);
 	let result: RpcMemoryEditResult["result"] = { ok: true };
 	switch (edit.kind) {
+		case "knowledge-source":
+		case "knowledge-entry":
+			result = await editProjectKnowledge(agentDir, scope.cwd, await knowledgeSettingsFor(session, scope.cwd), edit);
+			break;
 		case "note":
 		case "lesson": {
 			const kind = edit.kind === "note" ? "notes" : "lessons";
-			if (edit.action === "add") {
-				if (edit.kind !== "note") throw new Error("Lessons are captured by the agent; only notes can be added.");
-				result = await editMemoryList(agentDir, scope.cwd, kind, { action: "add", text: edit.text });
-			} else if (edit.action === "update") {
-				result = await editMemoryList(agentDir, scope.cwd, kind, {
-					action: "update",
-					line: edit.line,
-					text: edit.text,
-					context: edit.context,
-				});
-			} else {
-				result = await editMemoryList(agentDir, scope.cwd, kind, { action: "delete", line: edit.line });
+			if (edit.action === "add" && edit.kind !== "note") {
+				throw new Error("Lessons are captured by the agent; only notes can be added.");
 			}
+			const write = () => editMemoryList(agentDir, scope.cwd, kind, edit);
+			result = edit.kind === "note" ? await editLocalKnowledgeNote(agentDir, scope.cwd, write) : await write();
 			break;
 		}
 		case "source": {

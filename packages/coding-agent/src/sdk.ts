@@ -936,8 +936,6 @@ export interface CreateAgentSessionOptions {
 	skipPythonPreflight?: boolean;
 	/** Tool names explicitly requested (enables disabled-by-default tools) */
 	toolNames?: string[];
-	/** Built-ins excluded by the embedding host; does not filter extensions. */
-	disabledBuiltinTools?: ReadonlySet<string>;
 	/** Names from `toolNames` that a fork inherits as tool commands rather than explicit top-level tools. */
 	mountedToolNames?: string[];
 	/** Limit the session to explicitly supplied tool names, without discovered extras. */
@@ -2751,9 +2749,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				return session?.getFindHintVisible();
 			},
 			restrictToolNames,
-			disabledBuiltinTools: options.disabledBuiltinTools,
 			get hasEditTool() {
-				if (options.disabledBuiltinTools?.has("edit")) return false;
 				const requestedToolNames = options.toolNames ? normalizeToolNames(options.toolNames) : undefined;
 				return restrictToolNames
 					? requestedToolNames?.includes("edit") === true

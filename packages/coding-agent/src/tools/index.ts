@@ -360,8 +360,6 @@ export interface ToolSession {
 	 * required yield tool). Suppresses automatic tool-set expansion.
 	 */
 	restrictToolNames?: boolean;
-	/** Host-excluded built-ins, honored by both startup and live settings reconciliation. */
-	disabledBuiltinTools?: ReadonlySet<string>;
 	/** Task recursion depth (0 = top-level, 1 = first child, etc.) */
 	taskDepth?: number;
 	/**
@@ -713,8 +711,7 @@ export async function resolveBuiltinToolPlan(session: ToolSession, toolNames?: s
 	// we only probe Python when JS is disabled — otherwise allowEval is
 	// already true and per-backend availability is checked at first invocation.
 	let pythonAvailable = true;
-	const evalRequested =
-		!session.disabledBuiltinTools?.has("eval") && (requestedTools === undefined || requestedTools.includes("eval"));
+	const evalRequested = requestedTools === undefined || requestedTools.includes("eval");
 	if (!skipEvalPreflight && !allowJs && evalRequested) {
 		if (allowPython) {
 			const availability = await logger.time(
@@ -804,7 +801,6 @@ export async function resolveBuiltinToolPlan(session: ToolSession, toolNames?: s
 	}
 	const editDisabled = cfgEditMode.get(session.settings) === "none";
 	const isToolAllowed = (name: string) => {
-		if (session.disabledBuiltinTools?.has(name)) return false;
 		// Never in the default set. Explicitly activatable while goal.enabled and
 		// no goal record exists yet — /guided-goal enables it so the agent can
 		// finish the interview with `goal create`, which turns goal mode on. Once

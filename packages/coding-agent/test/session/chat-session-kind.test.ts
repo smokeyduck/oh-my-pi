@@ -7,7 +7,6 @@ import { cfgAutolearnEnabled } from "@oh-my-pi/pi-coding-agent/autolearn/setting
 import { parseArgs } from "@oh-my-pi/pi-coding-agent/cli/args";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { cfgEditMode } from "@oh-my-pi/pi-coding-agent/edit/settings";
 import { cfgAutoResume } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import { buildSessionOptions, createSessionManager } from "@oh-my-pi/pi-coding-agent/main";
 import { cfgMemoryBackend } from "@oh-my-pi/pi-coding-agent/memory-backend/settings";
@@ -188,17 +187,17 @@ describe("--chat flag → session options", () => {
 	});
 });
 
-it("applies desktop tool profiles to the actual built-in plan without converting Work to Chat", async () => {
-	const cwd = makeTempDir("@omp-desktop-tool-profile-");
+it("keeps Work restricted without converting it to Chat or overriding tool settings", async () => {
+	const cwd = makeTempDir("@omp-work-tools-");
 	const authStorage = await AuthStorage.create(path.join(cwd, "auth.db"));
 	const settings = await Settings.loadIsolated({ cwd, agentDir: cwd, inMemory: true });
-	cfgAutolearnEnabled.override(settings, false);
-	cfgEditMode.override(settings, "hashline");
+	cfgAutolearnEnabled.override(settings, true);
+	cfgMemoryBackend.override(settings, "local");
 	cfgComputerEnabled.override(settings, true);
 	const registry = new ModelRegistry(authStorage);
 	const manager = SessionManager.create(cwd, path.join(cwd, "sessions"));
 	const gui = parseArgs(["--mode", "rpc-ui"]);
-	const oldProfile = process.env.WISA_GUI_TOOL_PROFILE;
+	const oldHostMode = process.env.WISA_RPC_HOST_MODE;
 	const toolSession: ToolSession = {
 		cwd,
 		settings,
@@ -208,54 +207,72 @@ it("applies desktop tool profiles to the actual built-in plan without converting
 		skipPythonPreflight: true,
 	};
 	try {
-		process.env.WISA_GUI_TOOL_PROFILE = "work:read,computer,edit,learn,manage_skill";
+		process.env.WISA_RPC_HOST_MODE = "work";
 		const work = await buildSessionOptions(gui, [], manager, registry, settings);
 		expect(work.restrictToolNames).toBe(true);
 		expect(manager.getHeader()?.kind).not.toBe("chat");
-		const workPlan = await resolveBuiltinToolPlan(
-			{ ...toolSession, restrictToolNames: work.restrictToolNames },
-			work.toolNames,
-		);
-		expect(workPlan.names).toEqual(["read", "edit", "computer"]);
-		cfgAutolearnEnabled.override(settings, true);
-		cfgMemoryBackend.override(settings, "local");
-		const learningPlan = await resolveBuiltinToolPlan(
-			{ ...toolSession, restrictToolNames: work.restrictToolNames },
-			work.toolNames,
-		);
-		expect(learningPlan.names).toEqual(["read", "edit", "computer", "learn", "manage_skill"]);
+		const workToolSession = { ...toolSession, restrictToolNames: work.restrictToolNames };
+		const workPlan = await resolveBuiltinToolPlan(workToolSession, work.toolNames);
+		expect(workPlan.names).toEqual(["read", "ask", "computer", "glob", "grep", "todo", "web_search"]);
 		cfgComputerEnabled.override(settings, false);
-		const computerOff = await resolveBuiltinToolPlan(
-			{ ...toolSession, restrictToolNames: work.restrictToolNames },
-			work.toolNames,
-		);
-		expect(computerOff.names).not.toContain("computer");
-		cfgComputerEnabled.override(settings, true);
+		const computerOff = await resolveBuiltinToolPlan(workToolSession, work.toolNames);
+		expect(computerOff.names).toEqual(["read", "ask", "glob", "grep", "todo", "web_search"]);
+		for (const flag of ["--no-tools", "--chat"]) {
+			const restricted = await buildSessionOptions(
+				parseArgs(["--mode", "rpc-ui", flag]),
+				[],
+				manager,
+				registry,
+				settings,
+			);
+			expect(restricted.toolNames).toEqual([]);
+			expect(restricted.restrictToolNames).toBe(true);
+		}
 
-		process.env.WISA_GUI_TOOL_PROFILE = "work:";
-		const blank = await buildSessionOptions(gui, [], manager, registry, settings);
-		expect(blank.toolNames).toEqual([]);
-		expect(blank.restrictToolNames).toBe(true);
-
-		process.env.WISA_GUI_TOOL_PROFILE = "coding:bash,ast_grep,edit";
-		const coding = await buildSessionOptions(gui, [], manager, registry, settings);
-		expect(coding.restrictToolNames).toBeUndefined();
-		const codingPlan = await resolveBuiltinToolPlan({
-			...toolSession,
-			disabledBuiltinTools: coding.disabledBuiltinTools,
-		});
-		expect(codingPlan.names).toContain("read");
-		expect(codingPlan.names).not.toContain("computer");
-		expect(codingPlan.names).not.toContain("bash");
-		expect(codingPlan.names).not.toContain("ast_grep");
-		expect(codingPlan.names).not.toContain("edit");
-		expect(codingPlan.isAllowed("bash")).toBe(false);
 		const cli = await buildSessionOptions(parseArgs([]), [], manager, registry, settings);
-		expect(cli.disabledBuiltinTools).toBeUndefined();
+		expect(cli.toolNames).toBeUndefined();
+
+		process.env.WISA_RPC_HOST_MODE = "host-tools-only";
+		const hostOnly = await buildSessionOptions(gui, [], manager, registry, settings);
+		expect(hostOnly.toolNames).toEqual([]);
+		expect(hostOnly.restrictToolNames).toBe(true);
+		expect(hostOnly.disableExtensionDiscovery).toBe(true);
+
+		delete process.env.WISA_RPC_HOST_MODE;
+		const coding = await buildSessionOptions(gui, [], manager, registry, settings);
+		expect(coding.toolNames).toBeUndefined();
+		expect(coding.restrictToolNames).toBeUndefined();
+		const codingPlan = await resolveBuiltinToolPlan(toolSession, coding.toolNames);
+		expect(codingPlan.names).toContain("bash");
+		expect(codingPlan.names).toContain("edit");
 	} finally {
-		if (oldProfile === undefined) delete process.env.WISA_GUI_TOOL_PROFILE;
-		else process.env.WISA_GUI_TOOL_PROFILE = oldProfile;
+		if (oldHostMode === undefined) delete process.env.WISA_RPC_HOST_MODE;
+		else process.env.WISA_RPC_HOST_MODE = oldHostMode;
 	}
+});
+
+it("defaults computer to enabled in a fresh Work host without overriding a stored false", async () => {
+	const script = `
+		import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+		import { cfgComputerEnabled } from "@oh-my-pi/pi-coding-agent/tools/settings";
+		const settings = Settings.isolated();
+		const defaultEnabled = cfgComputerEnabled.get(settings);
+		cfgComputerEnabled.set(settings, false);
+		console.log(JSON.stringify([defaultEnabled, cfgComputerEnabled.get(settings)]));
+	`;
+	const child = Bun.spawn([process.execPath, "--eval", script], {
+		cwd: path.resolve(import.meta.dir, "../.."),
+		env: { ...process.env, WISA_RPC_HOST_MODE: "work", WISA_STUDIO_DEFAULTS: "1" },
+		stdout: "pipe",
+		stderr: "pipe",
+	});
+	const [stdout, stderr, code] = await Promise.all([
+		new Response(child.stdout).text(),
+		new Response(child.stderr).text(),
+		child.exited,
+	]);
+	expect(code, stderr).toBe(0);
+	expect(JSON.parse(stdout)).toEqual([true, false]);
 });
 
 describe("--chat + autoResume", () => {

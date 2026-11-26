@@ -61,6 +61,7 @@ import {
 import { generateTaskName, sanitizeAgentId } from "./name-generator";
 import { AgentOutputManager } from "./output-manager";
 import { ovnfsWorkspace } from "./ovnfs";
+import { type JudgedModelRoute, judgeSubagentModelRoute } from "./judge-routing";
 import { resolveSpawnPolicy, spawnDenial } from "./spawn-policy";
 import type { AgentDefinition } from "./types";
 import type {
@@ -84,6 +85,7 @@ import {
 	cfgTaskIsolationEnabled,
 	cfgTaskIsolationMerge,
 	cfgTaskPerCallModel,
+	isTaskJudgeRoutingEnabled,
 	ovnfsCommand,
 	perCallModelEnabled,
 } from "./settings";
@@ -211,6 +213,9 @@ export interface EffectiveSubagentPolicy {
 	preferHealthyModel?: boolean;
 	/** Extension routing note explaining a `before_subagent_spawn` model replacement. */
 	modelRoute?: string;
+	/** Whether the resolved policy leaves the initial model open to native Judge routing. */
+	allowJudgeModelRouting?: boolean;
+	judgedModelRoute?: JudgedModelRoute;
 	/** Exact-name `task.agentServiceTierOverrides` entry for this agent, applied after model resolution. */
 	serviceTierOverride?: ServiceTierInheritSettingValue;
 	/** Exact-name entry normalized to both child compaction threshold fields. */
@@ -497,9 +502,9 @@ function discoverAgentsShared(cwd: string, extensionRoots?: EffectiveExtensionRo
 export async function resolveEffectiveSubagentPolicy(
 	request: StructuredSubagentRequest,
 ): Promise<EffectiveSubagentPolicy> {
-	// A per-call model is approved against the operator settings behind any overlay, so reload those too.
+	// Per-call and judged models use the operator settings behind any overlay.
 	await request.session.settings.reloadFromDisk({
-		includeParents: request.perCallModel !== undefined,
+		includeParents: request.perCallModel !== undefined || isTaskJudgeRoutingEnabled(request.session.settings),
 	});
 	const spawnPolicy = resolveSpawnPolicy(request.session.getSessionSpawns());
 	const agentName = request.agent?.trim() || spawnPolicy.defaultAgent;
@@ -602,6 +607,8 @@ export async function resolveEffectiveSubagentPolicy(
 	} = perCallModelGrants
 		? { patterns: [(perCallSelector as string).trim()], role: undefined, source: "request" }
 		: resolveAgentModelSelection(modelResolution);
+	const inheritedRole =
+		source === "session" ? resolveExplicitModelRole(effectiveAgent.model, request.session.settings) : undefined;
 	const isolationEnabled = cfgTaskIsolationEnabled.get(request.session.settings);
 	const isIsolated = request.isolation?.requested === true;
 	if (isIsolated && !isolationEnabled) {
@@ -618,6 +625,15 @@ export async function resolveEffectiveSubagentPolicy(
 		modelOverride,
 		modelRole,
 		preferHealthyModel: source === "catalogRole" || undefined,
+		allowJudgeModelRouting:
+			request.model === undefined &&
+			perCallSelector === undefined &&
+			!Object.hasOwn(agentModelOverrides, agentName) &&
+			!userTaggedEffort &&
+			(!sessionAgents.includes(agent) || agent.model === undefined) &&
+			(agent.source === "bundled" || agent.model === undefined) &&
+			!(inheritedRole && request.session.settings.getModelRole(inheritedRole)?.trim()) &&
+			(source === "catalogRole" || source === "session"),
 		serviceTierOverride,
 		compactionThresholdOverride,
 		oauthAccountPools,
@@ -652,12 +668,11 @@ async function applySpawnHook(
 	policy: EffectiveSubagentPolicy,
 ): Promise<EffectiveSubagentPolicy> {
 	const emit = request.session.emitBeforeSubagentSpawn;
-	if (!emit) return policy;
 	const spawnKey =
 		request.identity?.id ??
 		request.identity?.label ??
 		(request.parentToolCallId !== undefined ? `${request.parentToolCallId}:${request.index ?? 0}` : undefined);
-	const spawnResult = await emit(
+	const spawnResult = await emit?.(
 		{
 			type: "before_subagent_spawn",
 			agent: policy.agentName,
@@ -671,10 +686,15 @@ async function applySpawnHook(
 	if (spawnResult?.block) {
 		throw new StructuredSubagentError("preflight", spawnResult.reason ?? "Subagent spawn blocked by extension.");
 	}
-	if (spawnResult?.model === undefined) return policy;
-	const replacement = resolveConfiguredModelPatterns(spawnResult.model, request.session.settings);
-	if (replacement.length === 0) return policy;
-	return { ...policy, modelOverride: replacement, preferHealthyModel: undefined, modelRoute: spawnResult.note };
+	if (spawnResult?.model !== undefined) {
+		const replacement = resolveConfiguredModelPatterns(spawnResult.model, request.session.settings);
+		return replacement.length === 0
+			? policy
+			: { ...policy, modelOverride: replacement, preferHealthyModel: undefined, modelRoute: spawnResult.note };
+	}
+	if (!policy.allowJudgeModelRouting || !isTaskJudgeRoutingEnabled(request.session.settings)) return policy;
+	const judgedModelRoute = await judgeSubagentModelRoute(request, policy.agent, policy.modelRole);
+	return judgedModelRoute ? { ...policy, judgedModelRoute } : policy;
 }
 
 /** Reserve a session-global agent id only after preflight has succeeded. */
@@ -773,6 +793,7 @@ function buildExecutorOptions(
 		modelRole: policy.modelRole,
 		preferHealthyModel: policy.preferHealthyModel,
 		modelRoute: policy.modelRoute,
+		judgedModelRoute: policy.judgedModelRoute,
 		serviceTierOverride: policy.serviceTierOverride,
 		compactionThresholdOverride: policy.compactionThresholdOverride,
 		oauthAccountPools: policy.oauthAccountPools,

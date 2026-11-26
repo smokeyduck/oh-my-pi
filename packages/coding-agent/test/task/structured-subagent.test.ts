@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import path from "node:path";
+import { type JudgmentResult, tokenUsage } from "@oh-my-pi/pi-ai";
 import { unregisterCustomApis } from "@oh-my-pi/pi-ai/api-registry";
 import { createMockModel, registerMockApi } from "@oh-my-pi/pi-ai/providers/mock";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
@@ -29,6 +30,7 @@ import {
 	artifactsDirsFromRegistry,
 	resetRegisteredArtifactDirsForTests,
 } from "@oh-my-pi/pi-coding-agent/internal-urls/registry-helpers";
+import * as judgment from "@oh-my-pi/pi-coding-agent/judgment";
 import * as planHandoff from "@oh-my-pi/pi-coding-agent/plan-mode/plan-handoff";
 import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
@@ -42,6 +44,7 @@ import * as discoveryModule from "@oh-my-pi/pi-coding-agent/task/discovery";
 import { createEvalCustomTools } from "@oh-my-pi/pi-coding-agent/task/eval-tools";
 import * as executorModule from "@oh-my-pi/pi-coding-agent/task/executor";
 import * as isolationRunner from "@oh-my-pi/pi-coding-agent/task/isolation-runner";
+import { resolveJudgedModelRoute } from "@oh-my-pi/pi-coding-agent/task/judge-routing";
 import {
 	buildStructuredSubagentRecoveryHint,
 	resolveEffectiveSubagentPolicy,
@@ -58,7 +61,11 @@ import { createSessionDefaults } from "../helpers/session-defaults";
 
 import { cfgRetryModelFallback } from "@oh-my-pi/pi-coding-agent/session/settings";
 import { cfgEvalToolsEnabled } from "@oh-my-pi/pi-coding-agent/eval/settings";
-import { cfgTaskAgentModelOverrides, cfgTaskEnableEffort } from "@oh-my-pi/pi-coding-agent/task/settings";
+import {
+	cfgTaskAgentModelOverrides,
+	cfgTaskEnableEffort,
+	cfgTaskPerCallModelAllow,
+} from "@oh-my-pi/pi-coding-agent/task/settings";
 
 const AGENT: AgentDefinition = {
 	name: "worker",
@@ -649,6 +656,166 @@ describe("structured subagent primitive", () => {
 			},
 		]);
 		await fs.rm(settled.artifactsDir, { recursive: true, force: true });
+	});
+
+	describe("native Judge routing at before_subagent_spawn", () => {
+		const fast = createMockModel({ id: "fast" });
+		const strong = createMockModel({ id: "strong" });
+		const outside = createMockModel({ provider: "outside", id: "strong" });
+		const notApproved = createMockModel({ id: "catalog-only" });
+		const image = { ...createMockModel({ id: "image" }), kind: "image" as const };
+		const chat = [fast, strong, outside, notApproved];
+		const catalog = [...chat, image];
+
+		function routingSession(overrides: Record<string, unknown> = {}): ToolSession {
+			return Object.assign(
+				session({
+					settings: Settings.isolated({
+						"task.judgeRouting": true,
+						modelRoles: {
+							routefast: "mock/fast",
+							routestrong: "mock/strong",
+							outside: "outside/strong",
+							other: "mock/image",
+						},
+						...overrides,
+					}),
+				}),
+				{
+					getActiveModel: () => fast,
+					getActiveModelString: () => "mock/fast",
+					modelRegistry: {
+						getAll: () => catalog,
+						getAvailable: (kind?: string) => (kind === "all" ? catalog : chat),
+						isSelectorSuppressed: () => false,
+					},
+				},
+			);
+		}
+
+		function choice(label: string): JudgmentResult {
+			return {
+				api: "typesafe",
+				provider: "typesafe",
+				model: "jev-fixture",
+				answers: { route: { type: "choice", choice: label, probabilities: { [label]: 1 }, confidence: 1 } },
+				usage: tokenUsage(0, 0),
+			};
+		}
+
+		it("keeps scout @smol and reviewer @slow as the baseline, but judges each child independently", async () => {
+			vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({
+				agents: [
+					{ ...AGENT, name: "scout", model: ["@smol"] },
+					{ ...AGENT, name: "reviewer", model: ["@slow"] },
+				],
+				projectAgentsDir: null,
+			});
+			const assignments = ["Trace an intermittent cross-module race.", "Check the presence of the license header."];
+			const childSession = routingSession();
+			const spawn = vi.fn(async (_event: BeforeSubagentSpawnEvent) => undefined);
+			childSession.emitBeforeSubagentSpawn = spawn;
+			vi.spyOn(judgment, "hasNativeJudge").mockReturnValue(true);
+			const judge = vi.spyOn(judgment, "judgeNatively").mockImplementation(async (_purpose, input) => {
+				const state = input.state;
+				const target = typeof state === "object" && "assignment" in state && state.assignment === assignments[0]
+					? "mock/strong"
+					: "mock/fast";
+				const route = input.questions.route;
+				const label = route.type === "choice"
+					? Object.keys(route.criteria).find(key => route.criteria[key]?.includes(`(${target})`))
+					: undefined;
+				return choice(label ?? "keep") as never;
+			});
+			const run = vi.spyOn(executorModule, "runSubprocess").mockImplementation(async () => result());
+			const requests = ["scout", "reviewer"].map((agent, index) =>
+				request({
+					session: childSession,
+					agent,
+					assignment: assignments[index],
+					index,
+					context: "private shared context",
+				}),
+			);
+			const baseline = await Promise.all(requests.map(resolveEffectiveSubagentPolicy));
+			expect(baseline.map(policy => policy.modelRole)).toEqual(["smol", "slow"]);
+			expect(baseline[0].modelOverride).not.toEqual(baseline[1].modelOverride);
+			expect(judge).not.toHaveBeenCalled();
+			const settled = await Promise.all(requests.map(runStructuredSubagent));
+			const routes = settled.map(({ policy }) => policy.judgedModelRoute!);
+			expect(routes.map(route => route.selector)).toEqual(["mock/strong", "mock/fast"]);
+			expect(routes.map(route => resolveJudgedModelRoute(route, childSession.modelRegistry!)?.id)).toEqual(["strong", "fast"]);
+			expect(spawn).toHaveBeenCalledTimes(2);
+			expect(run).toHaveBeenCalledTimes(2);
+			expect(judge).toHaveBeenCalledTimes(2);
+			for (const [, input] of judge.mock.calls) {
+				expect(Object.keys(input.state)).toEqual(["assignment", "agent", "normalRole"]);
+				expect(JSON.stringify(input)).not.toMatch(/private shared context|mock\/catalog-only|mock\/image/);
+			}
+			// Revoking a route after judgment cannot redirect that selection to a fuzzy match.
+			cfgTaskPerCallModelAllow.override(childSession.settings, ["mock/fast"]);
+			expect(resolveJudgedModelRoute(routes[0], childSession.modelRegistry!)).toBeUndefined();
+		});
+
+		it("cannot route to another provider under offline policy or to a disabled provider", async () => {
+			mockDiscovery();
+			vi.spyOn(judgment, "hasNativeJudge").mockReturnValue(true);
+			const judge = vi.spyOn(judgment, "judgeNatively").mockResolvedValue(choice("route_3") as never);
+			vi.spyOn(executorModule, "runSubprocess").mockResolvedValue(result());
+			for (const restriction of [{ "models.offline": true }, { disabledProviders: ["outside"] }]) {
+				const childSession = routingSession(restriction);
+				const { policy } = await runStructuredSubagent(request({ session: childSession }));
+				expect(policy.judgedModelRoute).toBeUndefined();
+			}
+			expect(judge).toHaveBeenCalledTimes(2);
+			for (const [, input] of judge.mock.calls) expect(JSON.stringify(input)).not.toContain("outside/strong");
+		});
+
+		it("does not consult Judge for explicit selectors, operator roles, or extension replacements", async () => {
+			mockDiscovery({ ...AGENT, model: ["@smol"] });
+			const native = vi.spyOn(judgment, "hasNativeJudge").mockReturnValue(true);
+			vi.spyOn(executorModule, "runSubprocess").mockResolvedValue(result());
+			const base = routingSession({ "task.perCallModel": "on" });
+			const named = routingSession({ "task.agentModelOverrides": { worker: "mock/strong" } });
+			const role = routingSession({ modelRoles: { smol: "mock/strong" } });
+			const extension = routingSession();
+			extension.emitBeforeSubagentSpawn = async () => ({ model: "mock/strong" });
+			for (const overrides of [
+				{ session: base, model: "mock/strong" },
+				{ session: base, perCallModel: "mock/strong" },
+				{ session: named },
+				{ session: role },
+				{ session: extension },
+			]) {
+				const { policy } = await runStructuredSubagent(request(overrides));
+				expect(policy.judgedModelRoute).toBeUndefined();
+				expect(policy.modelOverride).toEqual(["mock/strong"]);
+			}
+			expect(native).not.toHaveBeenCalled();
+		});
+
+		it("leaves normal routing on no consent, native unavailability, timeout, abstention or an invented answer", async () => {
+			mockDiscovery();
+			const native = vi.spyOn(judgment, "hasNativeJudge").mockReturnValue(false);
+			const judge = vi.spyOn(judgment, "judgeNatively");
+			vi.spyOn(executorModule, "runSubprocess").mockResolvedValue(result());
+			const childSession = routingSession();
+			const unapprovedOptIn = Settings.isolated().overlay({ "task.judgeRouting": true }, { derived: true });
+			await runStructuredSubagent(request({ session: Object.assign(routingSession(), { settings: unapprovedOptIn }) }));
+			expect(native).not.toHaveBeenCalled();
+			const call = request({ session: childSession });
+			expect((await runStructuredSubagent(call)).policy.judgedModelRoute).toBeUndefined();
+			expect(judge).not.toHaveBeenCalled();
+			native.mockReturnValue(true);
+			judge.mockRejectedValueOnce(new DOMException("deadline", "TimeoutError"));
+			judge.mockResolvedValueOnce(choice("keep") as never);
+			judge.mockResolvedValueOnce(choice("mock/catalog-only") as never);
+			for (let i = 0; i < 3; i++) {
+				const { policy } = await runStructuredSubagent(call);
+				expect(policy.modelOverride).toEqual(["mock/fast"]);
+				expect(policy.judgedModelRoute).toBeUndefined();
+			}
+		});
 	});
 
 	it("rejects dispatch before leasing artifacts when an extension blocks the spawn", async () => {

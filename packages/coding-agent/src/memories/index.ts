@@ -20,6 +20,7 @@ import type { ModelRegistry } from "../config/model-registry";
 import { getModelMatchPreferences, resolveModelRoleValue } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
 import { redactMemorySecrets as redactSecrets } from "../memory-backend/redact";
+import { cfgMemoryBackend } from "../memory-backend/settings";
 import type { MemoryBackendSaveInput, MemoryBackendSaveResult } from "../memory-backend/types";
 import consolidationTemplate from "../prompts/memories/consolidation.md" with { type: "text" };
 import consolidationSystemTemplate from "../prompts/memories/consolidation_system.md" with { type: "text" };
@@ -28,6 +29,8 @@ import stageOneInputTemplate from "../prompts/memories/stage_one_input.md" with 
 import stageOneSystemTemplate from "../prompts/memories/stage_one_system.md" with { type: "text" };
 import type { AgentSession } from "../session/agent-session";
 import { journalCompletion } from "../session/model-usage-journal";
+import { cfgVaultEnabled } from "../tools/settings";
+import { type ProjectKnowledge, readProjectKnowledge } from "./project-knowledge";
 import {
 	claimStage1Jobs,
 	clearMemoryData as clearMemoryDataInDb,
@@ -68,7 +71,6 @@ import {
 	cfgMemoriesSummaryInjectionTokenLimit,
 	cfgMemoriesThreadScanLimit,
 } from "./settings";
-import { cfgMemoryBackend } from "../memory-backend/settings";
 
 export interface MemoryRuntimeConfig {
 	enabled: boolean;
@@ -170,6 +172,7 @@ interface MemoryInstructionSession {
 
 interface MemoryToolDeveloperInstructionsSnapshot {
 	notes: string;
+	vaultNotes?: boolean;
 	summary: string;
 	learned: string;
 }
@@ -182,6 +185,7 @@ function memoryConversationStarted(session: MemoryInstructionSession): boolean {
 
 interface CachedMemoryToolDeveloperInstructions {
 	sessionFile: string | undefined;
+	projectKey: string;
 	snapshot: MemoryToolDeveloperInstructionsSnapshot | undefined;
 	value: string | undefined;
 }
@@ -190,7 +194,11 @@ const memoryToolDeveloperInstructionsBySession = new WeakMap<
 	MemoryInstructionSession,
 	CachedMemoryToolDeveloperInstructions
 >();
-const memoryToolDeveloperInstructionsByRoot = new Map<string, MemoryToolDeveloperInstructionsSnapshot | undefined>();
+const memoryToolDeveloperInstructionsByProject = new Map<string, MemoryToolDeveloperInstructionsSnapshot | undefined>();
+
+function memoryInstructionProjectKey(agentDir: string, cwd: string): string {
+	return JSON.stringify([agentDir, normalizeScopeCwd(path.resolve(cwd))]);
+}
 
 function getMemoryInstructionSessionFile(session: MemoryInstructionSession): string | undefined {
 	return session.sessionManager.getSessionFile() ?? undefined;
@@ -198,28 +206,48 @@ function getMemoryInstructionSessionFile(session: MemoryInstructionSession): str
 
 async function readMemoryToolDeveloperInstructionsSnapshot(
 	memoryRoot: string,
+	agentDir: string,
+	cwd: string,
 	settings: Settings,
 ): Promise<MemoryToolDeveloperInstructionsSnapshot | undefined> {
 	const cfg = loadMemoryConfig(settings);
 	if (!cfg.enabled) return undefined;
 
-	return readMemorySnapshot(memoryRoot);
+	const knowledge = await readProjectKnowledge(agentDir, cwd, settings).catch(error => {
+		logger.warn("Project knowledge source could not be read", { cwd, error: String(error) });
+		return null;
+	});
+	return readMemorySnapshot(memoryRoot, knowledge);
+}
+
+async function readMemorySummary(memoryRoot: string): Promise<string> {
+	try {
+		return (await Bun.file(path.join(memoryRoot, "memory_summary.md")).text()).trim();
+	} catch {
+		return "";
+	}
 }
 
 /** The injectable memory parts of one project root; each is "" when absent or unreadable. */
-export async function readMemorySnapshot(memoryRoot: string): Promise<MemoryToolDeveloperInstructionsSnapshot> {
-	let summary = "";
-	try {
-		summary = (await Bun.file(path.join(memoryRoot, "memory_summary.md")).text()).trim();
-	} catch {
-		// Missing or unreadable summary — injection is best-effort; fall through
-		// so notes and captured lessons still surface on their own.
-	}
-	const [notes, learned] = await Promise.all([
-		readNeutralizedLines(memoryRoot, MEMORY_NOTES_FILE),
+export async function readMemorySnapshot(
+	memoryRoot: string,
+	knowledge?: ProjectKnowledge | null,
+): Promise<MemoryToolDeveloperInstructionsSnapshot> {
+	const localNotes = knowledge === undefined || knowledge?.source === "local";
+	const [summary, learned, notes] = await Promise.all([
+		readMemorySummary(memoryRoot),
 		readLearnedLessons(memoryRoot),
+		localNotes ? readNeutralizedLines(memoryRoot, MEMORY_NOTES_FILE) : "",
 	]);
-	return { notes, summary, learned };
+	if (localNotes) return { notes, summary, learned };
+	const lines: string[] = [];
+	if (knowledge?.source === "obsidian" && knowledge.status === "ready") {
+		for (const note of knowledge.notes) lines.push(`- ${normalizeLearnedText(note.text, MAX_MEMORY_NOTE_CHARS)}`);
+		for (const lesson of knowledge.lessons) {
+			lines.push(`- Approved lesson: ${normalizeLearnedText(lesson.text, MAX_LEARNED_CONTENT_CHARS)}`);
+		}
+	}
+	return { notes: lines.join("\n"), vaultNotes: true, summary, learned };
 }
 
 /** What one project's memory contributes to a new session's prompt, within the injection budget. */
@@ -293,7 +321,8 @@ function renderMemoryToolDeveloperInstructionsSnapshot(
 	if (!cfg.enabled) return undefined;
 	// Notes, summary, and lessons share ONE injection budget so the combined
 	// block stays within `summaryInjectionTokenLimit`; see planMemoryInjection.
-	const plan = planMemoryInjection(snapshot, cfg.summaryInjectionTokenLimit);
+	const permitted = !snapshot.vaultNotes || cfgVaultEnabled.get(settings);
+	const plan = planMemoryInjection(permitted ? snapshot : { ...snapshot, notes: "" }, cfg.summaryInjectionTokenLimit);
 	if (!plan.notes && !plan.summary && !plan.learned) return undefined;
 
 	return prompt.render(readPathTemplate, {
@@ -306,11 +335,12 @@ function renderMemoryToolDeveloperInstructionsSnapshot(
 function cacheMemoryToolDeveloperInstructions(
 	session: MemoryInstructionSession,
 	sessionFile: string | undefined,
+	projectKey: string,
 	snapshot: MemoryToolDeveloperInstructionsSnapshot | undefined,
 	settings: Settings,
 ): string | undefined {
 	const value = renderMemoryToolDeveloperInstructionsSnapshot(snapshot, settings);
-	memoryToolDeveloperInstructionsBySession.set(session, { sessionFile, snapshot, value });
+	memoryToolDeveloperInstructionsBySession.set(session, { sessionFile, projectKey, snapshot, value });
 	return value;
 }
 
@@ -342,16 +372,20 @@ export async function refreshMemoryToolDeveloperInstructionsCacheAfterStartup(
 ): Promise<void> {
 	if (memoryConversationStarted(session)) return;
 	const sessionFile = getMemoryInstructionSessionFile(session);
+	const projectKey = memoryInstructionProjectKey(agentDir, cwd);
 	const cached = memoryToolDeveloperInstructionsBySession.get(session);
 	const root = getMemoryRoot(agentDir, cwd);
-	const current = await readMemoryToolDeveloperInstructionsSnapshot(root, settings);
+	const enabled = loadMemoryConfig(settings).enabled;
+	const summary = enabled ? await readMemorySummary(root) : "";
 	if (memoryConversationStarted(session)) return;
-	const baseline = memoryToolDeveloperInstructionsByRoot.get(root);
-	const cachedSnapshot = cached && cached.sessionFile === sessionFile ? cached.snapshot : undefined;
-	const learned = cachedSnapshot?.learned ?? baseline?.learned ?? "";
-	const notes = cachedSnapshot?.notes ?? baseline?.notes ?? "";
-	const snapshot = current ? { notes, summary: current.summary, learned } : undefined;
-	cacheMemoryToolDeveloperInstructions(session, sessionFile, snapshot, settings);
+	const baseline = memoryToolDeveloperInstructionsByProject.get(projectKey);
+	const cachedSnapshot =
+		cached && cached.sessionFile === sessionFile && cached.projectKey === projectKey ? cached.snapshot : undefined;
+	const prior = cachedSnapshot ?? baseline;
+	const snapshot = enabled
+		? { notes: prior?.notes ?? "", vaultNotes: prior?.vaultNotes, summary, learned: prior?.learned ?? "" }
+		: undefined;
+	cacheMemoryToolDeveloperInstructions(session, sessionFile, projectKey, snapshot, settings);
 }
 
 /**
@@ -368,18 +402,24 @@ export async function buildMemoryToolDeveloperInstructions(
 	session?: MemoryInstructionSession,
 ): Promise<string | undefined> {
 	const root = getMemoryRoot(agentDir, cwd);
+	const projectKey = memoryInstructionProjectKey(agentDir, cwd);
 	if (!session) {
-		const snapshot = await readMemoryToolDeveloperInstructionsSnapshot(root, settings);
-		memoryToolDeveloperInstructionsByRoot.set(root, snapshot);
+		const snapshot = await readMemoryToolDeveloperInstructionsSnapshot(root, agentDir, cwd, settings);
+		memoryToolDeveloperInstructionsByProject.set(projectKey, snapshot);
 		return renderMemoryToolDeveloperInstructionsSnapshot(snapshot, settings);
 	}
 
 	const sessionFile = getMemoryInstructionSessionFile(session);
 	const cached = memoryToolDeveloperInstructionsBySession.get(session);
-	if (cached && cached.sessionFile === sessionFile) return cached.value;
+	if (cached && cached.sessionFile === sessionFile && cached.projectKey === projectKey) {
+		if (cached.snapshot?.vaultNotes && !cfgVaultEnabled.get(settings)) {
+			return renderMemoryToolDeveloperInstructionsSnapshot(cached.snapshot, settings);
+		}
+		return cached.value;
+	}
 
-	const snapshot = await readMemoryToolDeveloperInstructionsSnapshot(root, settings);
-	return cacheMemoryToolDeveloperInstructions(session, sessionFile, snapshot, settings);
+	const snapshot = await readMemoryToolDeveloperInstructionsSnapshot(root, agentDir, cwd, settings);
+	return cacheMemoryToolDeveloperInstructions(session, sessionFile, projectKey, snapshot, settings);
 }
 
 /**

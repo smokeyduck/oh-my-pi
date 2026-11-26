@@ -372,6 +372,23 @@ export const cfgTaskEnableEffort = register({
 	},
 });
 
+export const cfgTaskJudgeRouting = register({
+	id: "task.judgeRouting",
+	type: "boolean",
+	default: false,
+	ui: {
+		tab: "tasks",
+		group: "Subagents",
+		label: "Judge model routing",
+		description:
+			"Opt in to sending a short excerpt of each unpinned subagent assignment (not the conversation or shared context) to your native Judge backend. It can select only from chat routes already approved by your configuration. Explicit choices win; when Judge is unavailable or abstains, normal routing applies. Project settings cannot opt in on your behalf.",
+	},
+});
+
+export function isTaskJudgeRoutingEnabled(settings: Settings): boolean {
+	return cfgTaskJudgeRouting.get(settings) && cfgTaskJudgeRouting.get(settings.grantAuthority());
+}
+
 export const cfgTaskPerCallModel = register({
 	id: "task.perCallModel",
 	type: "enum",

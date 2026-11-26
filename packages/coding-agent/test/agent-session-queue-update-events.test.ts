@@ -101,10 +101,10 @@ describe("AgentSession queue_update events", () => {
 		return updates;
 	}
 
-	/** Resolves once `target`'s queue snapshot satisfies `done`: at once, or at the queue_update that makes it. */
-	function queueSettles(target: AgentSession, done: (snapshot: QueueSnapshot) => boolean): Promise<void> {
+	/** Resolves once `target`'s RPC-facing queue satisfies `done`: at once, or at the queue_update that makes it. */
+	function queueSettles(target: AgentSession, done: (snapshot: QueueUpdateSnapshot) => boolean): Promise<void> {
 		const { promise, resolve } = Promise.withResolvers<void>();
-		if (done(target.getQueuedMessages())) {
+		if (done(target.listQueuedMessages())) {
 			resolve();
 			return promise;
 		}

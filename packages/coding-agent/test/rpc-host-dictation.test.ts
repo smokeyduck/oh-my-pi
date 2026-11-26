@@ -7,7 +7,12 @@ import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-sessi
 import * as asrClient from "@oh-my-pi/pi-coding-agent/stt/asr-client";
 import type { SttProgressEvent } from "@oh-my-pi/pi-coding-agent/stt/asr-protocol";
 import * as downloader from "@oh-my-pi/pi-coding-agent/stt/downloader";
-import type { STTControllerDependencies } from "@oh-my-pi/pi-coding-agent/stt/stt-controller";
+import {
+	hostDictationLanguage,
+	hostDictationModelKey,
+	resolveHostDictationCandidate,
+	type STTControllerDependencies,
+} from "@oh-my-pi/pi-coding-agent/stt/stt-controller";
 
 const STREAMING = getBundledModel("local", "nemotron-streaming-en-0.6b");
 const registry: STTControllerDependencies["registry"] = {
@@ -16,6 +21,28 @@ const registry: STTControllerDependencies["registry"] = {
 	getAll: () => [STREAMING],
 	resolver: () => () => "test-key",
 };
+
+test("host settings keep an explicit auto language and use Vietnamese / multilingual Whisper when unset", () => {
+	const defaults = Settings.isolated();
+	expect(hostDictationLanguage(defaults)).toBe("vi");
+	expect(hostDictationModelKey(resolveHostDictationCandidate(defaults, registry)?.model)).toBe("whisper-small");
+	expect(hostDictationLanguage(Settings.isolated({ "stt.language": "" }))).toBe("");
+	expect(hostDictationLanguage(Settings.isolated({ "stt.language": "en" }))).toBe("en");
+});
+
+test("cloud requires a directly selected provider/model and is never a model-chain fallback", () => {
+	const cloud = getBundledModel("openai", "whisper-1");
+	const models = [STREAMING, cloud];
+	const available = { ...registry, getAvailable: () => models, getAll: () => models };
+	const settings = Settings.isolated();
+	settings.setModelRole("dictation", "openai/whisper-1");
+	expect(resolveHostDictationCandidate(settings, available)?.model.id).toBe(cloud.id);
+	settings.setModelRole("dictation", "missing/no-model,openai/whisper-1");
+	expect(resolveHostDictationCandidate(settings, available)?.model.api).not.toBe("openai-transcriptions");
+	const offline = Settings.isolated({ "models.offline": true });
+	offline.setModelRole("dictation", "openai/whisper-1");
+	expect(resolveHostDictationCandidate(offline, available)?.model.api).not.toBe("openai-transcriptions");
+});
 
 /** PCM16 little-endian, base64 — the `host_dictation_audio` payload. */
 function pcm16Base64(values: number[]): string {

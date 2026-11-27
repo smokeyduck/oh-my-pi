@@ -7,7 +7,7 @@
 - Use Core settings for Coding tabs and a restricted default tool set for Work tabs, preserving explicit tool and approval restrictions.
 - Add opt-in native Judge routing for subagents and a separate Obsidian vault for reviewed project knowledge.
 - Default Studio dictation to local Whisper Small with Vietnamese; cloud recognition requires an explicit cloud model.
-- Show the target and action in WISA Studio Computer approvals and stop stale input when the target changes during confirmation. Studio defaults to background-only desktop input; an explicit takeover setting still takes precedence.
+- Interactive WISA Studio tabs use Core's regular Computer approval policy and default to foreground input when needed. Explicit approvals still bind input to the reviewed target. Headless sessions do not inherit Studio's automatic foreground permission.
 
 ### Fixed
 

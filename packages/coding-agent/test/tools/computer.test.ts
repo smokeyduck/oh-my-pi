@@ -676,15 +676,10 @@ describe("computer prelude", () => {
 		};
 		const supervisor = new ComputerSupervisor(session, () => liveWorker(native), undefined, undefined, NO_ESCAPE_STOPS);
 		const env = process.env.WISA_STUDIO_DEFAULTS;
+		const interactiveEnv = process.env.WISA_RPC_INTERACTIVE_COMPUTER;
 		process.env.WISA_STUDIO_DEFAULTS = "1";
-		const tool = (() => {
-			try {
-				return createComputerTool(session, () => supervisor);
-			} finally {
-				if (env === undefined) delete process.env.WISA_STUDIO_DEFAULTS;
-				else process.env.WISA_STUDIO_DEFAULTS = env;
-			}
-		})();
+		process.env.WISA_RPC_INTERACTIVE_COMPUTER = "1";
+		const tool = createComputerTool(session, () => supervisor);
 		let changeOnApproval = false;
 		const select = vi.fn(async (title: string) => {
 			expect(title).toContain("Target: Code — Editor (42)");
@@ -708,19 +703,36 @@ describe("computer prelude", () => {
 				{ method: "click", args: [1, 2] },
 			],
 		};
+		const approvedContext = {
+			hasUI: true,
+			settings: Settings.isolated({ "tools.approval": { computer: "prompt" } }),
+		} as AgentToolContext;
+		const automaticContext = { ...approvedContext, settings: Settings.isolated({}) };
 		try {
-			await wrapper.execute("stable", call);
-			expect(native.clickCount).toBe(1);
+			await wrapper.execute("automatic-1", call, undefined, undefined, automaticContext);
+			await wrapper.execute("automatic-2", call, undefined, undefined, automaticContext);
+			expect(native.clickCount).toBe(2);
+			expect(select).not.toHaveBeenCalled();
+			await wrapper.execute("stable", call, undefined, undefined, approvedContext);
+			expect(native.clickCount).toBe(3);
 			changeOnApproval = true;
-			await expect(wrapper.execute("stale", call)).rejects.toThrow("target changed while awaiting approval");
-			expect(native.clickCount).toBe(1);
+			await expect(wrapper.execute("stale", call, undefined, undefined, approvedContext)).rejects.toThrow(
+				"target changed while awaiting approval",
+			);
+			expect(native.clickCount).toBe(3);
 			native.covered = true;
-			await expect(wrapper.execute("covered", call)).rejects.toThrow("cannot be verified");
+			await expect(wrapper.execute("covered", call, undefined, undefined, approvedContext)).rejects.toThrow(
+				"cannot be verified",
+			);
 			expect(select).toHaveBeenCalledTimes(2);
-			expect(native.clickCount).toBe(1);
+			expect(native.clickCount).toBe(3);
 			await wrapper.execute("release", { action: "call", chain: [{ method: "control.release", args: [] }] });
 			expect(select).toHaveBeenCalledTimes(2);
 		} finally {
+			if (env === undefined) delete process.env.WISA_STUDIO_DEFAULTS;
+			else process.env.WISA_STUDIO_DEFAULTS = env;
+			if (interactiveEnv === undefined) delete process.env.WISA_RPC_INTERACTIVE_COMPUTER;
+			else process.env.WISA_RPC_INTERACTIVE_COMPUTER = interactiveEnv;
 			await supervisor.close();
 		}
 	});
@@ -3154,6 +3166,34 @@ describe("expanded computer APIs", () => {
 		},
 	);
 
+	it("auto-acquires control only in interactive Studio and honors an explicit denial", async () => {
+		const env = process.env.WISA_RPC_INTERACTIVE_COMPUTER;
+		process.env.WISA_RPC_INTERACTIVE_COMPUTER = "1";
+		const native = new FakeNativeSession();
+		const session = policySession({});
+		const supervisor = new ComputerSupervisor(session, () => liveWorker(native), undefined, undefined, NO_ESCAPE_STOPS);
+		const confirm = vi.fn(async () => true);
+		const interactive = { ...confirmationContext(confirm), settings: session.settings };
+		const acquire = 'return await desktop.control.acquire({ reason: "Policy" })';
+		try {
+			const headless = await supervisor.run(acquire, 2_000, snapshot(), undefined, { ...interactive, hasUI: false });
+			expect(headless.returnValue).toEqual({ active: false, reason: "no-ui" });
+			const denied = await supervisor.run(acquire, 2_000, snapshot(), undefined, {
+				...interactive,
+				settings: Settings.isolated({ "tools.approval": { "computer.control": "deny" } }),
+			});
+			expect(denied.returnValue).toEqual({ active: false, reason: "denied" });
+			const permitted = await supervisor.run(acquire, 2_000, snapshot(), undefined, interactive);
+			expect(permitted.returnValue).toEqual({ active: true });
+			expect(native.acquireCount).toBe(1);
+			expect(confirm).not.toHaveBeenCalled();
+		} finally {
+			if (env === undefined) delete process.env.WISA_RPC_INTERACTIVE_COMPUTER;
+			else process.env.WISA_RPC_INTERACTIVE_COMPUTER = env;
+			await supervisor.close();
+		}
+	});
+
 	// Neither the approval mode nor the computer policy grants foreground control.
 	it.each([
 		["yolo mode", false],
@@ -4883,7 +4923,14 @@ describe("computer.takeover opt-in modes, where omp decides", () => {
 
 	it("uses the host default and carries an opt-in mode into every request", async () => {
 		for (const [settings, expected] of [
-			[{}, process.env.WISA_STUDIO_DEFAULTS === "1" ? "refuse" : "fallback"],
+			[
+				{},
+				process.env.WISA_RPC_INTERACTIVE_COMPUTER === "1"
+					? "foreground"
+					: process.env.WISA_STUDIO_DEFAULTS === "1"
+						? "refuse"
+						: "fallback",
+			],
 			[{ "computer.takeover": "foreground" }, "foreground"],
 			[{ "computer.takeover": "always" }, "always"],
 		] as const) {

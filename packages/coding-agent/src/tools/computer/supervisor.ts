@@ -7,7 +7,6 @@ import * as logger from "@oh-my-pi/pi-utils/logger";
 import { Snowflake } from "@oh-my-pi/pi-utils/snowflake";
 import { workerHostEntry } from "@oh-my-pi/pi-utils/worker-host";
 import {
-	type ApprovalContextSource,
 	type ApprovalPolicy,
 	resolveApproval,
 	resolveApprovalFromContext,
@@ -27,6 +26,7 @@ import {
 	ESCAPE_REFUSED_MESSAGE,
 	ESCAPE_STOPPED_MESSAGE,
 	type RunErrorPayload,
+	isInteractiveStudioComputer,
 } from "./protocol";
 
 const START_TIMEOUT_MS = 10_000;
@@ -38,13 +38,18 @@ const SMOKE_TIMEOUT_MS = 5_000;
 const CAPABILITIES_TIMEOUT_MS = 10_000;
 const RESTART_MESSAGE = "computer worker restarted; captures and ax refs were reset";
 
-/**
- * The user's `tools.approval["computer.control"]` policy. The approval mode never decides it: the default `yolo`
- * would hand the user's foreground to every headless run, so without an explicit entry the user is asked.
- */
-function controlPolicy(context: ApprovalContextSource): ApprovalPolicy {
-	const { userPolicies } = resolveApprovalFromContext(context);
-	return resolveApproval({ name: "computer.control", approval: "exec" }, undefined, "always-ask", userPolicies).policy;
+/** The user's explicit control policy wins; only interactive Studio uses its ordinary approval mode. */
+function controlPolicy(settings: ToolSession["settings"], context?: AgentToolContext): ApprovalPolicy {
+	const { approvalMode, userPolicies } = resolveApprovalFromContext({
+		settings: context?.settings ?? settings,
+		autoApprove: context?.autoApprove,
+	});
+	return resolveApproval(
+		{ name: "computer.control", approval: "exec" },
+		undefined,
+		isInteractiveStudioComputer(context) && context?.ui ? approvalMode : "always-ask",
+		userPolicies,
+	).policy;
 }
 
 /** Runs desktop scripts and owns their persistent worker session. */
@@ -427,7 +432,7 @@ export class ComputerSupervisor implements ComputerController {
 		else pending.signal?.addEventListener("abort", onAbort, { once: true });
 		try {
 			const context = pending.context ?? this.#session.getToolContext?.();
-			const policy = controlPolicy(context ?? { settings: this.#session.settings });
+			const policy = controlPolicy(this.#session.settings, context);
 			let verdict: ControlVerdict;
 			if (policy === "allow") {
 				verdict = "approved";

@@ -22,6 +22,7 @@ import {
 	type ComputerApprovalState,
 	type ComputerScreenshot,
 	type ComputerSessionSnapshot,
+	isInteractiveStudioComputer,
 	modelChoosesTakeover,
 	type RunErrorPayload,
 	screenStateNotice,
@@ -224,7 +225,7 @@ export function createComputerTool(
 			return `${directComputerDescription}\n\n${renderComputerPrompt(computerUsePrompt, cfgComputerTakeover.get(session.settings), true)}`;
 		},
 		parameters: getComputerToolSchema(),
-		approval: args => {
+		approval: (args, context) => {
 			const tier = computerApproval(args);
 			if (args && typeof args === "object") {
 				if ("action" in args && args.action === "close") return "read";
@@ -238,6 +239,7 @@ export function createComputerTool(
 					return "read";
 				}
 			}
+			if (isInteractiveStudioComputer(context)) return tier;
 			return tier === "read" ? "read" : { tier: "exec", policy: "prompt", reason: "Desktop input or mutation" };
 		},
 		bindApprovalTargets: async (args, signal) => {
@@ -290,12 +292,14 @@ export function createComputerTool(
 				if (target) {
 					const approved = approvals.get(params);
 					approvals.delete(params);
-					if (!approved || approved.chain !== JSON.stringify(params.chain)) {
+					if (approved ? approved.chain !== JSON.stringify(params.chain) : !isInteractiveStudioComputer(context)) {
 						throw new ToolError("Desktop input has no matching approval target; no input was sent.");
 					}
-					binding = { target, expected: approved.state };
-					if (approved.state.windowId) {
-						params = { ...params, chain: [{ method: "window", args: [approved.state.windowId] }, params.chain[1]!] };
+					if (approved) {
+						binding = { target, expected: approved.state };
+						if (approved.state.windowId) {
+							params = { ...params, chain: [{ method: "window", args: [approved.state.windowId] }, params.chain[1]!] };
+						}
 					}
 				}
 			}
@@ -449,6 +453,14 @@ async function runComputer(
 	const readOnly = params.action === "call" ? isReadOnlyComputerCall(params.chain) : (params.read_only ?? false);
 	const timeoutSeconds = clampTimeout("computer", params.timeout, cfgToolsMaxTimeout.get(session.settings));
 	const snapshot = buildComputerSnapshot(session, readOnly);
+	// A headless child can share Studio's process and schema, but not its foreground default.
+	if (
+		process.env.WISA_RPC_INTERACTIVE_COMPUTER === "1" &&
+		!isInteractiveStudioComputer(context.context) &&
+		!session.settings.isConfigured(cfgComputerTakeover)
+	) {
+		snapshot.takeover = "refuse";
+	}
 	if (approval) snapshot.approval = approval;
 	const run = await controller.run(code, timeoutSeconds * 1000, snapshot, signal, context.context);
 	throwIfAborted(signal);

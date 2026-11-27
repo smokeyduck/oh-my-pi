@@ -798,7 +798,12 @@ export const cfgComputerTakeover = register({
 	id: "computer.takeover",
 	type: "enum",
 	values: ["fallback", "foreground", "always", "refuse"] as const,
-	default: process.env.WISA_STUDIO_DEFAULTS === "1" ? "refuse" : "fallback",
+	default:
+		process.env.WISA_RPC_INTERACTIVE_COMPUTER === "1"
+			? "foreground"
+			: process.env.WISA_STUDIO_DEFAULTS === "1"
+				? "refuse"
+				: "fallback",
 	ui: {
 		tab: "tools",
 		group: "Computer",

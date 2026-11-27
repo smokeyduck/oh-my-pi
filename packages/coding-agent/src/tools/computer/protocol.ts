@@ -1,3 +1,4 @@
+import type { AgentToolContext } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent, TextContent } from "@oh-my-pi/pi-ai";
 import type { CaptureRegion, DesktopCapabilities, DesktopScreenState } from "@oh-my-pi/pi-natives";
 import * as prompt from "@oh-my-pi/pi-utils/prompt";
@@ -48,6 +49,11 @@ export interface ComputerApprovalState {
  * call, and both rerun a call whose background route is unavailable in takeover.
  */
 export type ComputerTakeoverMode = "fallback" | "foreground" | "always" | "refuse";
+
+/** Only a live, unrestricted Studio tab opts into ordinary desktop tool approvals. */
+export function isInteractiveStudioComputer(context?: Pick<AgentToolContext, "hasUI">): boolean {
+	return process.env.WISA_RPC_INTERACTIVE_COMPUTER === "1" && context?.hasUI === true;
+}
 
 /** Whether the model may pass `takeover` on an input call: only in the modes that predate omp deciding. */
 export function modelChoosesTakeover(mode: ComputerTakeoverMode): boolean {

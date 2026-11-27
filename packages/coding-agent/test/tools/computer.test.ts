@@ -9,6 +9,8 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { EvalPreludeDefinition, HostEvalPreludeDefinition } from "@oh-my-pi/pi-coding-agent/eval/preludes";
 import { executeJs } from "@oh-my-pi/pi-coding-agent/eval/js/executor";
 import { disposeAllKernelSessions, executePython } from "@oh-my-pi/pi-coding-agent/eval/py/executor";
+import type { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/runner";
+import { ExtensionToolWrapper } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/wrapper";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { resolveApproval } from "@oh-my-pi/pi-coding-agent/tools/approval";
 import { computerApproval, createComputerPrelude, createComputerTool } from "@oh-my-pi/pi-coding-agent/tools/computer";
@@ -456,7 +458,7 @@ function toolSession(): ToolSession {
 	return {
 		cwd: import.meta.dir,
 		hasUI: false,
-		settings: Settings.isolated({ "computer.enabled": true }),
+		settings: Settings.isolated({ "computer.enabled": true, "computer.takeover": "fallback" }),
 		getSessionFile: () => null,
 		getSessionSpawns: () => null,
 	};
@@ -657,6 +659,70 @@ describe("computer prelude", () => {
 		expect(resolveApproval(tool, click, "yolo", { computer: "deny" }).policy).toBe("deny");
 		expect(resolveApproval(tool, { action: "capabilities" }, "yolo").policy).toBe("allow");
 		expect(tool.parameters({ action: "run", code: "1" })).toBeInstanceOf(type.errors);
+	});
+
+	it("binds each Studio Computer approval to the captured window and refuses changed pixels or unavailable targets", async () => {
+		class ChangingWindow extends FakeNativeSession {
+			pixel = 0;
+			override async capture(target: string): Promise<DesktopCapture> {
+				const frame = await super.capture(target);
+				return { ...frame, data: Uint8Array.of(this.pixel) };
+			}
+		}
+		const native = new ChangingWindow();
+		const session = {
+			...toolSession(),
+			settings: Settings.isolated({ "computer.enabled": true, "computer.takeover": "refuse" }),
+		};
+		const supervisor = new ComputerSupervisor(session, () => liveWorker(native), undefined, undefined, NO_ESCAPE_STOPS);
+		const env = process.env.WISA_STUDIO_DEFAULTS;
+		process.env.WISA_STUDIO_DEFAULTS = "1";
+		const tool = (() => {
+			try {
+				return createComputerTool(session, () => supervisor);
+			} finally {
+				if (env === undefined) delete process.env.WISA_STUDIO_DEFAULTS;
+				else process.env.WISA_STUDIO_DEFAULTS = env;
+			}
+		})();
+		let changeOnApproval = false;
+		const select = vi.fn(async (title: string) => {
+			expect(title).toContain("Target: Code — Editor (42)");
+			expect(title).toContain('Action: window({"app":"Code"}).click(1, 2)');
+			if (changeOnApproval) native.pixel += 1;
+			return "Approve";
+		});
+		const wrapper = new ExtensionToolWrapper(tool, {
+			hasHandlers: () => false,
+			consumeToolCallEmitted: () => false,
+			hasUI: () => true,
+			getUIContext: () => ({ select }),
+			runScoped<T>(fn: () => T): T {
+				return fn();
+			},
+		} as unknown as ExtensionRunner);
+		const call = {
+			action: "call" as const,
+			chain: [
+				{ method: "window", args: [{ app: "Code" }] },
+				{ method: "click", args: [1, 2] },
+			],
+		};
+		try {
+			await wrapper.execute("stable", call);
+			expect(native.clickCount).toBe(1);
+			changeOnApproval = true;
+			await expect(wrapper.execute("stale", call)).rejects.toThrow("target changed while awaiting approval");
+			expect(native.clickCount).toBe(1);
+			native.covered = true;
+			await expect(wrapper.execute("covered", call)).rejects.toThrow("cannot be verified");
+			expect(select).toHaveBeenCalledTimes(2);
+			expect(native.clickCount).toBe(1);
+			await wrapper.execute("release", { action: "call", chain: [{ method: "control.release", args: [] }] });
+			expect(select).toHaveBeenCalledTimes(2);
+		} finally {
+			await supervisor.close();
+		}
 	});
 
 	it("keeps text it types, sets or copies out of status lines", () => {
@@ -3353,11 +3419,15 @@ describe("expanded computer APIs", () => {
 					try { await next(); } catch {}
 				}
 				return 1;`;
-			const reads = native.capabilityReads;
+			let readsAtStop: number | undefined;
+			native.onEscape = () => {
+				readsAtStop = native.capabilityReads;
+			};
 			await expect(prelude.invoke({ action: "run", code }, context)).rejects.toThrow(ESCAPE_STOPPED_MESSAGE);
 			expect(native.clickCount).toBe(0);
 			expect(native.operations).toEqual([]);
-			expect(native.capabilityReads).toBe(reads);
+			expect(readsAtStop).toBeDefined();
+			expect(native.capabilityReads).toBe(readsAtStop);
 		} finally {
 			await close();
 		}
@@ -4811,9 +4881,9 @@ describe("computer.takeover opt-in modes, where omp decides", () => {
 		return { prelude, modes };
 	}
 
-	it("leaves users who set nothing on fallback, and carries an opt-in mode into every request", async () => {
+	it("uses the host default and carries an opt-in mode into every request", async () => {
 		for (const [settings, expected] of [
-			[{}, "fallback"],
+			[{}, process.env.WISA_STUDIO_DEFAULTS === "1" ? "refuse" : "fallback"],
 			[{ "computer.takeover": "foreground" }, "foreground"],
 			[{ "computer.takeover": "always" }, "always"],
 		] as const) {

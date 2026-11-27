@@ -646,9 +646,12 @@ discard a valid output limit. Without it, a valid top-level `max_output_tokens`,
 sets the cap, ahead of any bundled-reference limit. Each spelling is validated on its own, so an
 unusable value on one never suppresses a usable sibling. Otherwise, context and output follow the
 existing native/reference/default fallback.
-Silent endpoints can inherit bundled-reference limits, reasoning, and input modalities; unknown models
-use 128,000 context and 32,768 output as generic chat defaults. Output caps are bounded by the resolved context;
-Anthropic-routed models use an 8,192-token fallback output cap.
+Silent endpoints can inherit bundled-reference limits and reasoning. For generic `/v1/models`
+discovery and new custom model entries, an input modality is not inherited from another provider's
+fuzzy ID match. Set `input: [text, image]` in the model definition or `modelOverrides` when the
+route supports images but does not report them. Unknown models use 128,000 context and 32,768
+output as generic chat defaults. Output caps are bounded by the resolved context; Anthropic-routed
+models use an 8,192-token fallback output cap.
 
 When neither configuration, discovery nor the catalog establishes reasoning support, thinking is
 **unverified**, not disabled. The first request with a thinking level (including the session default)

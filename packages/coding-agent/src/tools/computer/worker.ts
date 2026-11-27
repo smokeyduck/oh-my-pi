@@ -51,6 +51,7 @@ import { ToolAbortError, throwIfAborted } from "../tool-errors";
 import { ToolError } from "../tool-errors";
 import { unknownOptionsMessage } from "./option-errors";
 import {
+	type ComputerApprovalState,
 	type ComputerEscapeScope,
 	type ComputerScreenshot,
 	type ComputerSessionSnapshot,
@@ -1855,12 +1856,22 @@ export class ComputerWorkerCore {
 			else signal.addEventListener("abort", onCancel, { once: true });
 			try {
 				returnValue = await Promise.race([
-					this.#runContexts.run(runContext, () =>
-						runtime.run(message.code, `computer-run-${message.id}.js`, this.#runtimeHooks(active, output), {
+					this.#runContexts.run(runContext, async () => {
+						const approval = message.session.approval;
+						if (approval) {
+							const state = await this.#inspectApprovalTarget(session, desktop, runContext, approval);
+							if (!approval.expected) return state;
+							if (state.digest !== approval.expected.digest) {
+								throw new ToolError(
+									"Desktop target changed while awaiting approval; no input was sent. Inspect it again before retrying.",
+								);
+							}
+						}
+						return runtime.run(message.code, `computer-run-${message.id}.js`, this.#runtimeHooks(active, output), {
 							runId: message.id,
 							cwd: message.session.cwd,
-						}),
-					),
+						});
+					}),
 					cancelRejection,
 				]);
 				completed = true;
@@ -2053,7 +2064,63 @@ export class ComputerWorkerCore {
 		return context;
 	};
 
-	#createDesktopScope(session: NativeDesktopSession): object {
+	async #inspectApprovalTarget(
+		session: NativeDesktopSession,
+		desktop: {
+			window(selector: string | number | WindowFilter): Promise<Win>;
+			display(selector: string): Promise<{ id: string }>;
+			focusedWindow(): Promise<Win | null>;
+		},
+		{ signal, snapshot }: ComputerRunContext,
+		{ target, expected }: NonNullable<ComputerSessionSnapshot["approval"]>,
+	): Promise<ComputerApprovalState> {
+		const hash = new Bun.CryptoHasher("sha256");
+		const { method, args } = target;
+		const unavailable = () =>
+			new ToolError("Desktop target cannot be verified; no input was sent. Inspect an unlocked, visible target.");
+		if (session.screenState.screenLocked || session.screenState.displayAsleep) throw unavailable();
+		if (method === "ref") {
+			const ref = args[0];
+			validateString(ref, "ref(ref)", { nonEmpty: true });
+			const node = await nativeCall(signal, () => session.axNode(ref as string));
+			if (session.screenState.screenLocked || session.screenState.displayAsleep) throw unavailable();
+			return {
+				label: `${node.title ? `${node.title} — ` : ""}${node.role} (${node.ref})`,
+				digest: hash.update(JSON.stringify(node)).digest("hex"),
+			};
+		}
+		let windowId: string | undefined;
+		let captureTarget = "desktop";
+		let label = "Desktop";
+		if (method === "window") {
+			const selector = expected?.windowId ?? args[0];
+			const window = await desktop.window(selector as string | number | WindowFilter);
+			captureTarget = windowId = window.id;
+			label = `${window.app} — ${window.title} (${window.id})`;
+			hash.update(JSON.stringify([window.id, window.pid, window.app, window.title, window.bounds]));
+		} else {
+			if (snapshot.takeover === "refuse") throw unavailable();
+			if (method === "display") {
+				const display = await desktop.display(args[0] as string);
+				captureTarget = `display:${display.id}`;
+				label = `Display ${display.id}`;
+			}
+			const focus = await desktop.focusedWindow();
+			if (!focus) throw unavailable();
+			label += ` — ${focus.app} — ${focus.title} (${focus.id})`;
+			hash.update(JSON.stringify([focus.id, focus.pid]));
+		}
+		const frame = await nativeCall(signal, () =>
+			session.capture(captureTarget, { maxWidth: snapshot.captureMaxWidth, maxHeight: snapshot.captureMaxHeight }),
+		);
+		if (frame.screenLocked || frame.covered || session.screenState.screenLocked || session.screenState.displayAsleep) {
+			throw unavailable();
+		}
+		hash.update(JSON.stringify([frame.target, frame.coordinateWidth, frame.coordinateHeight, frame.displays]));
+		return { label, windowId, digest: hash.update(frame.data).digest("hex") };
+	}
+
+	#createDesktopScope(session: NativeDesktopSession) {
 		const getContext = this.#currentRunContext;
 		const makeWin = (window: DesktopWindow): Win => new Win(session, getContext, window);
 		const el = (node: AxNode): El => new El(session, getContext, node);
@@ -2126,7 +2193,7 @@ export class ComputerWorkerCore {
 				const { signal } = getContext();
 				return await nativeCall(signal, () => session.listDisplays());
 			},
-			display: async (selector: string): Promise<object> => {
+			display: async (selector: string) => {
 				const { signal } = getContext();
 				if (typeof selector !== "string" || !selector)
 					throw new ToolError("display requires an id, 'active', or 'all'");

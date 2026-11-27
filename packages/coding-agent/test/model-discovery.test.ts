@@ -3257,6 +3257,31 @@ describe("ModelRegistry runtime discovery", () => {
 		expect(unknown?.compatConfig).not.toMatchObject({ supportsReasoningEffort: false });
 	});
 
+	test.each(["openai-models-list", "proxy", "manual"] as const)(
+		"%s keeps a reseller route text-only unless images are declared",
+		async type => {
+			const id = "deepseek-v4.1-flash-1017-uncensored";
+			const providerConfig = { baseUrl: "https://proxy.example/v1", api: "openai-completions", auth: "none" };
+			writeRawModelsJson({
+				"silent-proxy": {
+					...providerConfig,
+					...(type === "manual" ? { models: [{ id }] } : { discovery: { type } }),
+				},
+				"vision-proxy": { ...providerConfig, models: [{ id, input: ["text", "image"] }] },
+			});
+			const fetchMock: FetchImpl = async input => {
+				if (String(input) === "https://proxy.example/v1/models") {
+					return Response.json({ data: [{ id, supported_endpoint_types: ["openai"] }] });
+				}
+				return new Response(null, { status: 404 });
+			};
+			const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock, cacheDbPath });
+			await registry.refresh();
+			expect(registry.find("silent-proxy", id)?.input).toEqual(["text"]);
+			expect(registry.find("vision-proxy", id)?.input).toEqual(["text", "image"]);
+		},
+	);
+
 	test.each(["openai-models-list", "proxy", "lm-studio"])(
 		"%s discovery distinguishes missing reasoning evidence from advertised true and false",
 		async type => {

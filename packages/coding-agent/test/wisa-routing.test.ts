@@ -71,7 +71,7 @@ describe("Wisa client-facing API defaults", () => {
 			const file = join(dir, "models.json");
 			const cacheDbPath = join(dir, "cache.db");
 			const cached = await discoverModelsByProviderType({ ...config, wisaDefaults: false }, context);
-			expect(writeModelCache("wisa:openai-models-list-context-v6", Date.now(), cached, true, "", cacheDbPath)).toBe(
+			expect(writeModelCache("wisa:openai-models-list-context-v7", Date.now(), cached, true, "", cacheDbPath)).toBe(
 				"written",
 			);
 			for (const api of [undefined, "openai-completions"] as const) {

@@ -3244,7 +3244,7 @@ export class ModelRegistry {
 	 * `offline` strategy nothing else refetches them.
 	 */
 	advertisedReasoningCacheSuffix(providerConfig: DiscoveryProviderConfig): string {
-		return providerConfig.discovery.advertisedReasoning === false ? "advertised-off-context-v6" : "context-v6";
+		return providerConfig.discovery.advertisedReasoning === false ? "advertised-off-context-v7" : "context-v7";
 	}
 
 	#configuredDiscoveryCacheProviderId(providerConfig: DiscoveryProviderConfig): string {
@@ -3252,22 +3252,8 @@ export class ModelRegistry {
 			return resolveOllamaModelCacheProviderId(providerConfig.provider, providerConfig.baseUrl);
 		}
 		if (providerConfig.discovery.type === "openai-models-list") {
-			// context-v3 invalidates rows cached before server-advertised input
-			// modalities were parsed from `/v1/models`; warm v2 rows pinned
-			// vision-capable ids at `input: ["text"]` until a forced refresh.
-			// context-v4 invalidates rows cached before
-			// `top_provider.max_completion_tokens` was read; warm v3 rows kept
-			// the bundled reference's larger output limit and the provider
-			// rejected every request.
-			// context-v5 invalidates rows cached before a row's advertised
-			// reasoning ladder outranked the bundled reference; warm v4 rows kept
-			// `reasoning: false` (ids absent from the catalog) or an inherited
-			// `omitReasoningEffort`, so no effort dial appeared until a refresh.
-			// context-v6 invalidates rows cached before a row's advertised
-			// `reasoning_effort_map` / `reasoning_required` were kept on the
-			// model; warm v5 rows stayed without the aliases, so an unsupported
-			// requested effort kept clamping to the tier below and a thinking-off
-			// request could reach a route that rejects it.
+			// context-v7 drops rows that could infer image support from a fuzzy
+			// ID match on another provider, as does the shared proxy suffix.
 			// `injectV1: false` additionally splits off its own namespace: rows
 			// cached from the `/v1`-injected URL can hold a different (smaller)
 			// model set and must never satisfy a bare provider's cache read.
@@ -3284,12 +3270,12 @@ export class ModelRegistry {
 			return `${providerConfig.provider}:proxy-v2-${this.advertisedReasoningCacheSuffix(providerConfig)}`;
 		}
 		if (providerConfig.discovery.type === "litellm") {
-			// rich-v7 invalidates incomplete /v2/model/info rosters cached before
-			// pagination. rich-v6 moved decisions-mode groups to the Decisions
-			// runner; rich-v5 filtered known non-conversational modes. Bump this
-			// namespace alongside the catalog package's `litellm:rich-vN` when
-			// discovery behavior changes.
-			return `${providerConfig.provider}:litellm-rich-v7`;
+			// v8 invalidates stale /v1/models fallback rows along with the
+			// configured OpenAI-compatible discovery cache above.
+			return `${providerConfig.provider}:litellm-rich-v8`;
+		}
+		if (providerConfig.discovery.type === "lm-studio") {
+			return `${providerConfig.provider}:lm-studio-input-v2`;
 		}
 		return providerConfig.provider;
 	}

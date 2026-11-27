@@ -3766,7 +3766,7 @@ describe("ModelRegistry", () => {
 				{
 					seedCache: dbPath =>
 						writeModelCache(
-							"cached-compact-proxy:openai-models-list-context-v6",
+							"cached-compact-proxy:openai-models-list-context-v7",
 							Date.now(),
 							[
 								buildModel({
@@ -3813,11 +3813,10 @@ describe("ModelRegistry", () => {
 					maxTokens: 16_384,
 				});
 			litellmStaleNamespaceCache = readonlyRegistry(litellmProxyConfig(), {
-				// Rows from rich-v6 may contain only the first /v2/model/info page;
-				// decisions-mode routing was already corrected in that namespace.
+				// Rows from v7 could inherit image support in /v1/models fallback.
 				seedCache: dbPath =>
 					writeModelCache(
-						"litellm-proxy:litellm-rich-v6",
+						"litellm-proxy:litellm-rich-v7",
 						Date.now(),
 						[litellmCachedModel("MiniMax-M3 (3x usage)")],
 						true,
@@ -3828,7 +3827,7 @@ describe("ModelRegistry", () => {
 			litellmCurrentNamespaceCache = readonlyRegistry(litellmProxyConfig(), {
 				seedCache: dbPath =>
 					writeModelCache(
-						"litellm-proxy:litellm-rich-v7",
+						"litellm-proxy:litellm-rich-v8",
 						Date.now(),
 						[litellmCachedModel("MiniMax-M3")],
 						true,
@@ -3849,11 +3848,10 @@ describe("ModelRegistry", () => {
 					},
 				},
 				{
-					// Row under the retired pre-`top_provider` namespace; the context-v4
-					// bump must orphan it instead of serving the stale output limit.
+					// V6 cached image support inherited from another provider's alias.
 					seedCache: dbPath =>
 						writeModelCache(
-							"stale-openai-proxy:openai-models-list-context-v3",
+							"stale-openai-proxy:openai-models-list-context-v6",
 							Date.now(),
 							[
 								buildModel({
@@ -3863,7 +3861,7 @@ describe("ModelRegistry", () => {
 									provider: "stale-openai-proxy",
 									baseUrl: "https://stale-proxy.example.com/v1",
 									reasoning: false,
-									input: ["text"],
+									input: ["text", "image"],
 									cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 									contextWindow: 128_000,
 									maxTokens: 65_536,
@@ -3908,12 +3906,12 @@ describe("ModelRegistry", () => {
 			});
 		});
 
-		test("ignores litellm discovery rows cached under the retired rich-v6 namespace", () => {
+		test("ignores litellm discovery rows cached before the image-input policy change", () => {
 			expect(litellmStaleNamespaceCache.find("litellm-proxy", "minimax/minimax-m3")).toBeUndefined();
 			expect(getModelsForProvider(litellmStaleNamespaceCache, "litellm-proxy")).toHaveLength(0);
 		});
 
-		test("restores LiteLLM backend session policy from rich-v7 alias rows without changing their API", () => {
+		test("restores LiteLLM backend session policy from current cache rows without changing their API", () => {
 			const model = litellmCurrentNamespaceCache.find("litellm-proxy", "minimax/minimax-m3");
 			expect(model?.name).toBe("MiniMax-M3");
 			expect(model?.provider).toBe("litellm-proxy");
@@ -3930,9 +3928,7 @@ describe("ModelRegistry", () => {
 			).toBe("cached-alias-session");
 		});
 
-		test("ignores openai-models-list rows cached under the retired context-v3 namespace", () => {
-			// PR #15652 reads `top_provider.max_completion_tokens`; warm v3 rows
-			// kept the bundled reference's larger output limit and must not load.
+		test("ignores OpenAI-compatible discovery rows cached with stale image support", () => {
 			expect(openaiModelsListStaleNamespaceCache.find("stale-openai-proxy", "stale-vlm")).toBeUndefined();
 			expect(getModelsForProvider(openaiModelsListStaleNamespaceCache, "stale-openai-proxy")).toHaveLength(0);
 		});

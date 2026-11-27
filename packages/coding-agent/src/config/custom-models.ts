@@ -109,6 +109,15 @@ export function buildCustomModelOverlay(
 	};
 }
 
+/** A fuzzy catalog match can name the model without proving another provider accepts its inputs. */
+export function inheritReferenceInput(
+	reference: Pick<Model<Api>, "provider" | "id" | "input"> | undefined,
+	provider: string,
+	id: string,
+): Model<Api>["input"] | undefined {
+	return reference && (reference.provider === provider || reference.id === id) ? reference.input : undefined;
+}
+
 export function finalizeCustomModel(resolvedModel: CustomModelOverlay, options: CustomModelBuildOptions): Model<Api> {
 	const reference = options.useDefaults
 		? resolveModelReference(resolvedModel.id, getBundledModelReferenceIndex())
@@ -117,7 +126,10 @@ export function finalizeCustomModel(resolvedModel: CustomModelOverlay, options: 
 		resolvedModel.cost ??
 		reference?.cost ??
 		(options.useDefaults ? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } : undefined);
-	const input = resolvedModel.input ?? reference?.input ?? (options.useDefaults ? ["text"] : undefined);
+	const input =
+		resolvedModel.input ??
+		inheritReferenceInput(reference, resolvedModel.provider, resolvedModel.id) ??
+		(options.useDefaults ? ["text"] : undefined);
 	const supportsTools = resolvedModel.supportsTools ?? reference?.supportsTools;
 	const built = buildModel({
 		id: resolvedModel.id,

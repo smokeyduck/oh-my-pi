@@ -372,7 +372,6 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 		// input that newly resolves to `deny` is caught here even though the original passed the
 		// short-circuit above.
 		const resolvedArgs = approvalArgs(effectiveParams, context);
-		this.tool.bindApprovalTargets?.(resolvedArgs);
 		const resolved = resolveApproval(
 			this.tool,
 			resolvedArgs,
@@ -421,6 +420,14 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 				(scheduledCall.name === this.tool.name || scheduledCall.name === this.tool.customWireName)
 			) {
 				await untilAborted(signal, () => this.runner.waitForToolApprovalPreview(toolCallId));
+			}
+			if (this.tool.bindApprovalTargets && this.runner.hasUI()) {
+				try {
+					await this.tool.bindApprovalTargets(resolvedArgs, signal);
+				} catch (error) {
+					cancelPreflight();
+					throw error;
+				}
 			}
 
 			const hasApprovalHandlers =

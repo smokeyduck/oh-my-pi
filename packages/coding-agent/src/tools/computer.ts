@@ -3,7 +3,7 @@ import type { AgentTool, AgentToolResult, ToolApprovalDecision } from "@oh-my-pi
 import type { Model } from "@oh-my-pi/pi-ai";
 import { classifyModel } from "@oh-my-pi/pi-catalog/identity";
 import type { DesktopCapabilities } from "@oh-my-pi/pi-natives";
-import { once } from "@oh-my-pi/pi-utils";
+import { once, sanitizeText } from "@oh-my-pi/pi-utils";
 import * as prompt from "@oh-my-pi/pi-utils/prompt";
 import { callSessionTool } from "../eval/js/tool-bridge";
 import type { EvalPreludeContext, HostEvalPreludeDefinition } from "../eval/preludes";
@@ -19,6 +19,7 @@ import {
 	WINDOW_METHODS,
 } from "./computer/call";
 import {
+	type ComputerApprovalState,
 	type ComputerScreenshot,
 	type ComputerSessionSnapshot,
 	modelChoosesTakeover,
@@ -181,12 +182,25 @@ const directComputerDescription = [
 	"Coordinates come from the latest full screenshot of that target; zoom does not change that frame. Ref IDs come from a fresh accessibility tree.",
 ].join("\n");
 
+const NON_VISUAL_COMPUTER_ACTIONS = new Set(["apps.open", "clipboard.write", "control.acquire", "control.release"]);
+
+function approvalTarget(chain: ComputerCallStep[]): ComputerCallStep | undefined {
+	const root = chain[0]!;
+	if (chain.length === 2) return root;
+	return NON_VISUAL_COMPUTER_ACTIONS.has(root.method) ? undefined : { method: "desktop", args: [] };
+}
+
 /** Native desktop helpers without a general-purpose scripting backend. */
-export function createComputerTool(session: ToolSession): AgentTool<Type<ComputerToolParams>, unknown> {
+export function createComputerTool(
+	session: ToolSession,
+	createController: ComputerControllerFactory = current => new ComputerSupervisor(current),
+): AgentTool<Type<ComputerToolParams>, unknown> {
 	let controller: ComputerController | undefined;
+	const guardApproval = process.env.WISA_STUDIO_DEFAULTS === "1";
+	const approvals = new WeakMap<object, { state: ComputerApprovalState; chain: string }>();
 	const getController = () => {
 		if (!controller) {
-			controller = new ComputerSupervisor(session);
+			controller = createController(session);
 			const dispose = ownComputerController(session, controller);
 			const cleanup = () => {
 				unlisten();
@@ -212,15 +226,80 @@ export function createComputerTool(session: ToolSession): AgentTool<Type<Compute
 		parameters: getComputerToolSchema(),
 		approval: args => {
 			const tier = computerApproval(args);
-			return tier === "read" || (args && typeof args === "object" && "action" in args && args.action === "close")
-				? "read"
-				: { tier: "exec", policy: "prompt", reason: "Desktop input or mutation" };
+			if (args && typeof args === "object") {
+				if ("action" in args && args.action === "close") return "read";
+				if (
+					guardApproval &&
+					"chain" in args &&
+					Array.isArray(args.chain) &&
+					args.chain.length === 1 &&
+					args.chain[0]?.method === "control.release"
+				) {
+					return "read";
+				}
+			}
+			return tier === "read" ? "read" : { tier: "exec", policy: "prompt", reason: "Desktop input or mutation" };
+		},
+		bindApprovalTargets: async (args, signal) => {
+			if (!guardApproval) return;
+			const params = getComputerToolSchema()(args);
+			if (params instanceof type.errors || params.action !== "call" || isReadOnlyComputerCall(params.chain)) return;
+			const key = args as object;
+			approvals.delete(key);
+			if (!cfgComputerEnabled.get(session.settings)) throw new ToolError("Computer use is disabled.");
+			const target = approvalTarget(params.chain);
+			const snapshot = buildComputerSnapshot(session, true);
+			if (
+				snapshot.takeover === "refuse" &&
+				(target?.method === "desktop" || target?.method === "display" || params.chain[0]?.method === "control.acquire")
+			) {
+				throw new ToolError(
+					'Foreground desktop input is disabled by computer.takeover: "refuse". Use a window target.',
+				);
+			}
+			if (!target) return;
+			const chain = JSON.stringify(params.chain);
+			const run = await getController().run("", 10_000, { ...snapshot, approval: { target } }, signal);
+			if (run.error) throw new ToolError(run.error.message);
+			const state = run.returnValue as ComputerApprovalState | undefined;
+			if (!state?.digest) throw new ToolError("Could not identify the desktop target; no input was sent.");
+			approvals.set(key, { state, chain });
+		},
+		formatApprovalDetails: args => {
+			const params = getComputerToolSchema()(args);
+			if (params instanceof type.errors || params.action !== "call") return undefined;
+			const state = approvals.get(args as object)?.state;
+			const parts = params.chain.map(step =>
+				["type", "setValue", "selectText", "clipboard.write"].includes(step.method)
+					? `${step.method}(<hidden>)`
+					: `${step.method}(${step.args.map(arg => JSON.stringify(arg)).join(", ")})`,
+			);
+			const safeLine = (text: string) => sanitizeText(text).replace(/[\r\n\t]/g, " ").slice(0, 320);
+			return [
+				...(state ? [`Target: ${safeLine(state.label)}`] : []),
+				`Action: ${safeLine(parts.join("."))}`,
+			];
 		},
 		execute: async (_id, params, signal, _onUpdate, context) => {
 			if (!cfgComputerEnabled.get(session.settings)) throw new ToolError("Computer use is disabled.");
 			if (params.action === "close" && !controller)
 				return { content: [{ type: "text", text: "No computer session open" }] };
-			return await invokeComputer(session, getController(), params, { signal, context }, true);
+			let binding: ComputerSessionSnapshot["approval"];
+			if (guardApproval && params.action === "call" && !isReadOnlyComputerCall(params.chain)) {
+				const target = approvalTarget(params.chain);
+				if (target) {
+					const approved = approvals.get(params);
+					approvals.delete(params);
+					if (!approved || approved.chain !== JSON.stringify(params.chain)) {
+						throw new ToolError("Desktop input has no matching approval target; no input was sent.");
+					}
+					binding = { target, expected: approved.state };
+					if (approved.state.windowId) {
+						params = { ...params, chain: [{ method: "window", args: [approved.state.windowId] }, params.chain[1]!] };
+					}
+				}
+			}
+			return await invokeComputer(session, getController(), params, { signal, context }, true, binding);
 		},
 	};
 }
@@ -288,13 +367,14 @@ async function invokeComputer(
 	params: ComputerParams,
 	context: Pick<EvalPreludeContext, "signal" | "context">,
 	standalone = false,
+	approval?: ComputerSessionSnapshot["approval"],
 ): Promise<AgentToolResult<unknown>> {
 	throwIfAborted(context.signal);
 
 	switch (params.action) {
 		case "run":
 		case "call":
-			return await runComputer(session, controller, params, context, standalone);
+			return await runComputer(session, controller, params, context, standalone, approval);
 		case "capabilities": {
 			const capabilities = await controller.capabilities(buildComputerSnapshot(session, true), context.signal);
 			throwIfAborted(context.signal);
@@ -361,6 +441,7 @@ async function runComputer(
 	params: ComputerRunParams | ComputerCallParams,
 	context: Pick<EvalPreludeContext, "signal" | "context">,
 	standalone: boolean,
+	approval?: ComputerSessionSnapshot["approval"],
 ): Promise<AgentToolResult<unknown>> {
 	const signal = context.signal;
 	const code = resolveComputerRunCode(params, standalone);
@@ -368,6 +449,7 @@ async function runComputer(
 	const readOnly = params.action === "call" ? isReadOnlyComputerCall(params.chain) : (params.read_only ?? false);
 	const timeoutSeconds = clampTimeout("computer", params.timeout, cfgToolsMaxTimeout.get(session.settings));
 	const snapshot = buildComputerSnapshot(session, readOnly);
+	if (approval) snapshot.approval = approval;
 	const run = await controller.run(code, timeoutSeconds * 1000, snapshot, signal, context.context);
 	throwIfAborted(signal);
 

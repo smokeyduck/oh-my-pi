@@ -38,6 +38,7 @@ import {
 import { Effort, THINKING_EFFORTS } from "@oh-my-pi/pi-catalog/effort";
 import { parseServiceTierIds } from "@oh-my-pi/pi-catalog/utils";
 import { isRecord, logger } from "@oh-my-pi/pi-utils";
+import { inheritReferenceInput } from "./custom-models";
 import type { ProviderDiscovery } from "./models-config-schema";
 import { isWisaGateway, wisaModelApi } from "./wisa-routing";
 
@@ -979,7 +980,7 @@ function collectModalities(values: readonly unknown[]): Set<string> {
  * Read image-input support from an OpenAI-compatible `/v1/models` row. Handles
  * direct `input` arrays, Synthetic-style top-level `input_modalities`, and
  * OpenRouter-style `architecture.input_modalities`; returns undefined when none
- * is present so the bundled reference (or the `["text"]` default) can take over.
+ * is present so a compatible bundled reference (or the `["text"]` default) can take over.
  */
 function extractOpenAIModelsListInputCapabilities(item: {
 	input?: unknown;
@@ -1413,19 +1414,20 @@ export async function discoverOpenAIModelsList(
 		// the 128K default even when the underlying model is e.g. a proxied
 		// Claude with a 1M window. Resolve the id against the bundled catalog
 		// (same pattern as `discoverProxyModels` and `discoverLiteLLMModels`) so
-		// intrinsic metadata — context/output limits, display name, modality,
-		// reasoning support — flows through when the provider is silent. Local
-		// runtime state and provider-reported values still win; proxy-specific
-		// headers/baseUrl/cost stay local.
+		// intrinsic metadata — context/output limits, display name, reasoning —
+		// flows through when the provider is silent. Never infer input modalities
+		// from a fuzzy match on another provider. Provider-reported values win.
 		const reference = resolveModelReference(id, references) as ModelSpec<Api> | undefined;
 		const referenceCompat = reference?.compat as OpenAICompat | undefined;
 		// codex-lb and similar registries nest the route's identity beside its
 		// reasoning ladder: `display_name`, `context_window`, `input_modalities`.
 		const metadata = isRecord(item.metadata) ? item.metadata : undefined;
 		const advertisedName = typeof metadata?.display_name === "string" ? metadata.display_name.trim() : "";
-		const input = nativeMetadataForModel?.input ??
+		const input =
+			nativeMetadataForModel?.input ??
 			extractOpenAIModelsListInputCapabilities(item) ??
-			reference?.input ?? ["text"];
+			inheritReferenceInput(reference, providerConfig.provider, id) ??
+			["text"];
 		const limits = isRecord(item.limits) ? item.limits : undefined;
 		const reportedLimitsContextWindow = nestedLimitsContextWindow(limits);
 		const reportedMaxTokens = advertisedOutputTokenLimit(item, limits);
@@ -1719,9 +1721,12 @@ export async function discoverProxyModels(
 			id;
 		// Same row shapes the generic list discovery reads: Synthetic-style
 		// `input_modalities`, OpenRouter-style `architecture.input_modalities`,
-		// and a flat `input` array. Keep the bundled reference as the fallback so
-		// silent rows behave exactly as before.
-		const input = extractOpenAIModelsListInputCapabilities(item) ?? reference?.input ?? ["text"];
+		// and a flat `input` array. Fall back to a compatible reference, not
+		// another provider's alias for a different wire id.
+		const input =
+			extractOpenAIModelsListInputCapabilities(item) ??
+			inheritReferenceInput(reference, providerConfig.provider, id) ??
+			["text"];
 		const limits = isRecord(item.limits) ? item.limits : undefined;
 		const reportedMaxTokens = advertisedOutputTokenLimit(item, limits);
 		const contextWindow =

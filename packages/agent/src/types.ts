@@ -1311,11 +1311,10 @@ export interface AgentTool<
 	approvalCacheTargets?: (args: unknown) => readonly string[] | undefined;
 
 	/**
-	 * Capture per-invocation targets after extension preflight, before final approval and execution.
-	 * The coding-agent wrapper calls this once with the final approval args, even without a prompt
-	 * or restricted folders. Restriction queries and approval details may then read the binding.
+	 * Capture per-invocation targets after policy checks, immediately before an interactive approval.
+	 * Approval details and execution can then use the same binding.
 	 */
-	bindApprovalTargets?: (args: unknown) => void;
+	bindApprovalTargets?: (args: unknown, signal?: AbortSignal) => void | Promise<void>;
 
 	/**
 	 * Query paths a call reads beyond its working directory, matched against restricted folders when

@@ -9,6 +9,7 @@ import coveredTreeNote from "../../prompts/tools/computer-covered-tree.md" with 
 import screenLockedCaptureNote from "../../prompts/tools/computer-screen-locked-capture.md" with { type: "text" };
 import secureInputTemplate from "../../prompts/tools/computer-secure-input.md" with { type: "text" };
 import screenStateTemplate from "../../prompts/tools/computer-screen-state.md" with { type: "text" };
+import type { ComputerCallStep } from "./call";
 
 export { COMPUTER_WORKER_ARG } from "../../cli/worker-selectors";
 
@@ -29,6 +30,14 @@ export interface ComputerSessionSnapshot {
 	 * `release-display` rather than for the native grace period after its last request.
 	 */
 	displayTurn?: number;
+	/** A preview reads the target; execution must match the preview before sending input. */
+	approval?: { target: ComputerCallStep; expected?: ComputerApprovalState };
+}
+
+export interface ComputerApprovalState {
+	label: string;
+	digest: string;
+	windowId?: string;
 }
 
 /**

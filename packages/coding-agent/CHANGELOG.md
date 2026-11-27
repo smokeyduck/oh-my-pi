@@ -7,10 +7,13 @@
 - Use Core settings for Coding tabs and a restricted default tool set for Work tabs, preserving explicit tool and approval restrictions.
 - Add opt-in native Judge routing for subagents and a separate Obsidian vault for reviewed project knowledge.
 - Default Studio dictation to local Whisper Small with Vietnamese; cloud recognition requires an explicit cloud model.
+- Show the target and action in WISA Studio Computer approvals and stop stale input when the target changes during confirmation. Studio defaults to background-only desktop input; an explicit takeover setting still takes precedence.
 
 ### Fixed
 
 - Pause automatic prompt-cache warming while the `ask` tool waits for user input. A subsequent model request can restart warming normally.
+- Stop inferring image input for custom OpenAI-compatible routes from fuzzy model ID matches on other providers. Explicit input settings and provider-reported modalities still take precedence.
+
 ## [19.2.1] - 2026-11-25
 
 ### Breaking Changes
